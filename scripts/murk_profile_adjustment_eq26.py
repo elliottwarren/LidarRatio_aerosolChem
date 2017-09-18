@@ -1,5 +1,9 @@
 """
-Calculate and plot the
+Calculate and plot eq 26 from Clark et al 2008, which explains how the murk aerosol profile is adjusted
+based on the vis DA comparison at the surface (S curve with 1.0 at surface and reducing with height)
+
+Currently assumes a constant potential temperature profile in accordance with a dry boundary layer
+Hence graph is ONLY applicable within the BL.
 
 Created by Elliott Thurs 14th Sept 2017
 """
@@ -16,6 +20,8 @@ import ellUtils as eu
 from forward_operator import FOUtils as FO
 from forward_operator import FOconstants as FOcon
 
+savedir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/figures/'
+
 # constants
 p0 = 100000.0 # Pa
 g = 9.81
@@ -27,6 +33,7 @@ gamma = -9.6 # dry lapse rate as I deal with clear air
 
 # variables
 p = np.arange(p0, 85000, -100)
+p_hPa = p/100.0
 T = theta0 / ((p0/p)**(R/cp))
 
 
@@ -46,6 +53,20 @@ z = x1 * x2
 
 # plotting
 
-fig, ax = plt.subplots(1, 1, figsize=(4,4))
-plt.plot(f, p)
-ax.set_ylim([p[-1], p[0]])
+fig, ax = plt.subplots(1, 1, figsize=(6,4))
+ax.plot(f, p_hPa)
+ax.set_ylim([p_hPa[0], p_hPa[-1]])
+plt.axvline(0.0, alpha=0.1, color='black', linestyle='--')
+plt.axvline(1.0, alpha=0.1, color='black', linestyle='--')
+ax.set_ylabel('pressure [hPa]')
+ax.set_xlabel('f')
+plt.savefig(savedir + 'p_murk_profile_adj_eq26_clarkEtAl2008.png')
+
+fig, ax = plt.subplots(1, 1, figsize=(6,4))
+ax.plot(f, z)
+plt.axvline(0.0, alpha=0.1, color='black', linestyle='--')
+plt.axvline(1.0, alpha=0.1, color='black', linestyle='--')
+ax.set_ylabel('height [m]')
+ax.set_ylim([z[0], z[-1]])
+ax.set_xlabel('f')
+plt.savefig(savedir + 'z_murk_profile_adj_eq26_clarkEtAl2008.png')
