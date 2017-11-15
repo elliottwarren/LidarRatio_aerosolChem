@@ -83,6 +83,11 @@ def read_dmps(filepath):
     startswith = 'Time 5.0125'
     delimiter = ' '
     headers = read_headers(filepath, startswith, delimiter)
+    header_bins = np.array(headers[2:])
+
+    # extract time
+    # extract data as 2D numpy array
+    # aps_time = np.array([np.nan if i[0] == 999999 else i[0] for i in dNdlogD_raw], dtype=float)
 
     # turn Nrawdata into a dictionary
     dNdlogD = {}
@@ -99,7 +104,7 @@ def read_dmps(filepath):
     dNdlogD['rawtime'] = dNdlogD['Time']  # original raw time
     del dNdlogD['Time']
 
-    return dNdlogD
+    return dNdlogD, header_bins
 
 def calc_bin_parameters_dmps(dNdlogD):
 
@@ -132,6 +137,70 @@ def calc_bin_parameters_dmps(dNdlogD):
 
     return D, dD, logD, dlogD
 
+def read_aps(filepath_aps):
+
+    """
+    Read in the apd data from clearflo. Very similar structure to read_dmps()
+    :param filepath_aps:
+    :return:
+    """
+
+    N_raw = np.genfromtxt(filepath_aps, delimiter='\t', skip_header=84, dtype=float, names=True)
+    # N_raw = np.genfromtxt(filepath, delimiter=',', skip_header=75, dtype=float, names=True)
+
+    # work around with the headers
+    # VERY specific use with the TSI APS from NK during clearfLo
+    # header line starts with [startswith]
+    startswith = 'Date	Total'
+    delimiter = '\t'
+    headers = read_headers(filepath_aps, startswith, delimiter) # all headers
+    header_bins = np.array(headers[2:])# just the bins
+
+    # turn raw into a dictionary
+    N = {}
+    for i, head in enumerate(headers):
+        N[head] = np.array([np.nan if j[i] == 9999 else j[i] for j in N_raw], dtype=float)
+
+    # turn dates into datetimes and store in N_data['time']
+    doy = np.array([int(i) for i in N['Date']])
+    doyFrac = np.array([i - int(i) for i in N['Date']])
+    base = dt.datetime(2012, 01, 01)
+    N['time'] = np.array(
+        [base - dt.timedelta(days=1) + dt.timedelta(days=doy_i) + (dt.timedelta(days=1 * doyFrac_i))
+         for doy_i, doyFrac_i in zip(doy, doyFrac)])
+    N['rawtime'] = N['Date']  # original raw time
+    del N['Date']
+
+    return N, header_bins
+
+def calc_bin_parameters_aps(N):
+
+    """
+    Calculate bin parameters for the aps data
+    :param N:
+    :return:
+    """
+
+    D_keys = N.keys()
+    del D_keys[D_keys.index('time')]  # remove time so we just get bin widths
+    del D_keys[D_keys.index('rawtime')]
+    del D_keys[D_keys.index('Total')]  # remove time so we just get bin widths
+    D_min = deepcopy(D_keys)
+    D_min = np.array(D_min, dtype=float)
+    D_min = np.sort(D_min)
+
+    # upper edge on last bin is 21.29 microns, therefore append it on the end
+    D_max = np.append(D_min[1:], 21.29)
+
+    # mid bin
+    D = (D_max + D_min) / 2.0
+    logD = np.log10(D)
+
+    # bin widths
+    dD = D_max - D_min
+    dlogD = np.log10(D_max) - np.log10(D_min)
+
+    return D, dD, logD, dlogD
 
 def main():
 
@@ -165,8 +234,8 @@ def main():
     # day list
     # clear sky days (5 Feb 2015 - 31 Dec 2016)
     # daystrList = ['20160504']
-    daystrList = ['20150414', '20150415', '20150421', '20150611', '20160504']
-    # daystrList = ['20150415']
+    # daystrList = ['20150414', '20150415', '20150421', '20150611', '20160504']
+    daystrList = ['20150415']
 
     days_iterate = eu.dateList_to_datetime(daystrList)
 
@@ -202,12 +271,11 @@ def main():
                    'man-dmps_n-kensington_20120114_r0.na'
 
         # read in the ClearfLo data
-        dNdlogD = read_dmps(filepath)
+        dmps_dNdlogD, dmps_header_bins = read_dmps(filepath)
 
-        # -----------------------------------------------------------------------
-        # 2. calculate bin centres (D_mid)
+        # calculate bin centres (D_mid)
 
-        D, dD, logD, dlogD = calc_bin_parameters_dmps(dNdlogD)
+        dmps_D, dmps_dD, dmps_logD, dmps_dlogD = calc_bin_parameters_dmps(dmps_dNdlogD)
 
         # # check mid, widths start and ends are ok
         # for i in range(len(widths_end)):
@@ -220,31 +288,70 @@ def main():
         filepath_aps = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/ClearfLo/' \
                        'man-aps_n-kensington_20120110_r0.na'
 
+        # read in aps data (dictionary format)
+        # header bins will be lower bound of the bin, not the bin mid! (header_bins != aps_D)
+        aps_N, aps_header_bins = read_aps(filepath_aps)
 
-        N_raw = np.genfromtxt(filepath_aps, delimiter='\t', skip_header=84, dtype=float, names=True)
-        # N_raw = np.genfromtxt(filepath, delimiter=',', skip_header=75, dtype=float, names=True)
+        # calculate bin parameters
+        # for the DMPS, the headers correspond to the min bin edge. Therefore, the header along is the bin max.
+        aps_D, aps_dD, aps_logD, aps_dlogD = calc_bin_parameters_aps(aps_N)
 
-        # work around with the headers
-        # VERY specific use with the TSI APS from NK during clearfLo
-        # header line starts with [startswith]
-        startswith = 'Date	Total'
-        delimiter = '\t'
-        headers = read_headers(filepath_aps, startswith, delimiter)
+        # -----------------------------------------------------------------------
 
-        # turn raw into a dictionary
-        N = {}
-        for i, head in enumerate(headers):
-            N[head] = np.array([np.nan if j[i] == 9999 else j[i] for j in N_raw], dtype=float)
+        # calc dNdlogD from N, for aps data (coarse)
+        aps_dNdlogD = {}
+        for idx in range(len(aps_D)):
 
-        # turn dates into datetimes and store in N_data['time']
-        doy = np.array([int(i) for i in N['Date']])
-        doyFrac = np.array([i - int(i) for i in N['Date']])
-        base = dt.datetime(2012, 01, 01)
-        N['time'] = np.array(
-            [base - dt.timedelta(days=1) + dt.timedelta(days=doy_i) + (dt.timedelta(days=1 * doyFrac_i))
-             for doy_i, doyFrac_i in zip(doy, doyFrac)])
-        N['rawtime'] = N['Date']  # original raw time
-        del N['Date']
+            # get bin name (start of bin for aps data annoyingly...), dlogD and D for each data column
+            # convert bin ranges from microns to nm
+            bin_i = aps_header_bins[idx]
+            dlogD_i = aps_dlogD[idx] * 1e3
+            D_i = aps_D[idx] * 1e3
+
+            aps_dNdlogD[str(D_i)] = aps_N[bin_i]/ dlogD_i
+
+        # -----------------------------------------------------------------------
+
+        # merge the two dNdlogD datasets together...
+        # set up so data resolution is 15 mins
+
+        # time range - APS time res: 5 min, DMPS time res: ~12 min
+        start_time = np.min([aps_N['time'][0], dmps_dNdlogD['time'][0]])
+        end_time = np.max([aps_N['time'][-1], dmps_dNdlogD['time'][-1]])
+        time_range = eu.date_range(start_time, end_time, 15, 'minutes')
+
+        # binned shape = [time, bin]
+        dNdlogD = {'time': time_range,
+                   'binned': np.empty([len(time_range), len(dmps_D)+len(aps_D)])}
+        dNdlogD['binned'][:] = np.nan
+
+        # insert the dmps data first, take average of all data within the time period
+        for t in range(len(time_range[:-1])):
+
+            # find data for this time
+            binary = np.logical_and(dmps_dNdlogD['time'] > time_range[t], dmps_dNdlogD['time'] < time_range[t + 1])
+
+            for D_idx in range(len(dmps_D)): # smaller data fill the first columns
+
+                # enumerate might be useful here...
+
+                # bin str
+                D_i_str = str(dmps_D[D_idx])
+
+                # create mean of all data within the time period and store
+                dNdlogD['binned'][t, D_idx] = np.nanmean(dmps_dNdlogD[D_i_str][binary])
+
+            for D_idx in range(len(aps_D)): # smaller data fill the first columns
+
+                # bin str
+                D_i_str = str(dmps_D[D_idx])
+
+                # idx in new dNlogD array (data will go after the dmps data)
+                D_binned_idx = D_idx + len(dmps_D)
+
+                # create mean of all data within the time period and store
+                dNdlogD['binned'][t, D_binned_idx] = np.nanmean(aps_dNdlogD[D_i_str][binary])
+
 
 
 
@@ -341,13 +448,36 @@ def main():
 
         # plot volume distribution for data (median with IQR)
         fig = plt.figure()
-        plt.plot(D*1e-3, dVdlogD['median'], label='median', color='blue')
+        plt.semilogx(D*1e-3, dVdlogD['median'], label='median', color='blue')
         plt.fill_between(D*1e-3, dVdlogD['25th'], dVdlogD['75th'], alpha=0.5, facecolor='blue', label='IQR')
         plt.ylabel('dV/dlogD')
         plt.xlabel('D [microns]')
         # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
         plt.legend()
         plt.savefig(savedir + 'aerosol_distributions/dVdlogD_v_D_clearflo_winter.png')
+        # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
+
+        # ------------------------------------------------
+
+        # create 2D array of data
+        dNdlogD['binned'] = np.squeeze(np.array([
+                            [np.array([dNdD[str(D_i)][j] for D_i in D])]
+                            for j in range(len(dNdD['time']))]))
+
+        # median, IQRs
+        dNdlogD['median'] = np.nanmedian(dNdlogD['binned'], axis=0)
+        dNdlogD['25th'] = np.nanpercentile(dNdlogD['binned'], 75, axis=0)
+        dNdlogD['75th'] = np.nanpercentile(dNdlogD['binned'], 25, axis=0)
+
+        # plot volume distribution for data (median with IQR)
+        fig = plt.figure()
+        plt.semilogx(D*1e-3, dNdlogD['median'], label='median', color='blue')
+        plt.fill_between(D*1e-3, dNdlogD['25th'], dNdlogD['75th'], alpha=0.5, facecolor='blue', label='IQR')
+        plt.ylabel('dN/dlogD')
+        plt.xlabel('D [microns]')
+        # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
+        plt.legend()
+        plt.savefig(savedir + 'aerosol_distributions/dNdlogD_v_D_clearflo_winter.png')
         # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
 
         # ------------------------------------------------
