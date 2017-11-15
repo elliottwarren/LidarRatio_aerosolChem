@@ -17,11 +17,6 @@ Dv = volume mean diameter
 """
 
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-import matplotlib.cm
-import matplotlib as mpl
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-from matplotlib.ticker import FormatStrFormatter
 from matplotlib.dates import DateFormatter
 
 import numpy as np
@@ -268,7 +263,6 @@ def merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D):
             # enumerate might be useful here...
 
             # find data for this time
-            # find data for this time
             binary = np.logical_and(dmps_dNdlogD['time'] > time_range[t],
                                     dmps_dNdlogD['time'] < time_range[t] + dt.timedelta(minutes=15))
 
@@ -309,17 +303,23 @@ def main():
     # directories
     maindir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/'
     datadir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/'
+
     savedir = maindir + 'figures/number_concentration/'
 
     # data
     ceilMetaDatadir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/'
     ceilDatadir = datadir + 'L1/'
+    rhdatadir = maindir + 'data/L1/'
 
     # pm10
     site = 'NK'
     ceil_id = 'CL31-D'
     # ceil = ceil_id + '_BSC_' + site
     ceil = ceil_id + '_' + site
+
+    # RH data
+    site_rh = {'WXT_KSK': np.nan}
+    rh_inst_site = site_rh.keys()[0]
 
     site_bsc = {ceil: FOcon.site_bsc[ceil]}
     # site_bsc = {ceil: FOcon.site_bsc[ceil], 'CL31-E_BSC_NK': 27.0 - 23.2}
@@ -344,7 +344,12 @@ def main():
 
 
     # read in RH data
-
+    # get all RH filenames and store them in a list
+    rhdays = eu.date_range(dt.datetime(2012, 01, 9), dt.datetime(2012, 02, 8), 1, 'days')
+    RHfilepaths = [rhdatadir + rh_inst_site+'_'+day.strftime('%Y%j')+'_1min.nc' for day in rhdays]
+    RH = eu.netCDF_read(RHfilepaths, vars=['RH', 'time'])
+    RH['time'] -= dt.timedelta(minutes=1) # change time from 'obs end' to 'start of obs', same as the other datasets
+    RH['RH'][RH['RH'] == -999] = np.nan # remove bad data with nans
 
 
     # read in number distribution from observed data ---------------------------
@@ -510,7 +515,75 @@ def main():
     plt.savefig(savedir + 'aerosol_distributions/Ntot_accum_0p02_0p7.png')
     # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
 
+    # ==============================================================================
+    # RH against r and N
+    # ==============================================================================
 
+    # subsample r or N based on RH
+
+    # get coarsened RH data
+    # plt histogram of it
+
+    RH_15min = {'time': dNdlogD['time'], 'RH': np.empty(len(dNdlogD['time']))}
+    RH_15min['RH'][:] = np.nan
+
+    for t, time_i in enumerate(RH_15min['time']):
+
+        # find the time for this period in the original 1min data
+        binary = np.logical_and(RH['time'] > time_i,
+                                RH['time'] < time_i + dt.timedelta(minutes=15))
+
+        # create mean of all data within the time period and store
+        RH_15min['RH'][t] = np.nanmean(RH['RH'][binary])
+
+    # RH line plot of clearflo during winter
+    fig, ax = plt.subplots(1,1)
+    plt.plot_date(RH_15min['time'], RH_15min['RH'], linestyle='-', fmt='-')
+    plt.xlabel('Date [dd/mm]')
+    ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
+    plt.ylabel('RH [%]')
+    plt.suptitle('RH during clearflo winter iop')
+    plt.savefig(savedir + 'aerosol_distributions/RH_lineplot.png')
+    plt.close(fig)
+
+    # ------------------------------------------------
+
+    # subsample dNdlogD based on RH
+
+    # threshold
+    thresh = 40.0
+
+    low_idx  = np.logical_and(RH_15min['RH'] < thresh, ~np.isnan(dNdlogD['Dv_accum']))
+    high_idx = np.logical_and(RH_15min['RH'] > thresh, ~np.isnan(dNdlogD['Dv_accum']))
+
+    low_data = dNdlogD['Dv_accum'][low_idx]
+    high_data = dNdlogD['Dv_accum'][high_idx]
+
+    low_n = len(low_data)
+    high_n = len(high_data)
+
+    low_str  = '< '+str(thresh)+'%' + ': n = ' + str(low_n)
+    high_str = '> '+str(thresh)+'%' + ': n = ' + str(high_n)
+
+    nbins = 25
+
+    fig, ax = plt.subplots(1,1)
+
+    for data, lab in zip([low_data, high_data], [low_str, high_str]):
+        n, bins = np.histogram(data, nbins, density=1)
+        pdfx = np.zeros(n.size)
+        pdfy = np.zeros(n.size)
+        for k in range(n.size):
+            pdfx[k] = 0.5 * (bins[k] + bins[k + 1])
+            pdfy[k] = n[k]
+
+        plt.plot(pdfx*1e-3, pdfy, label=lab)
+
+    plt.legend()
+    plt.ylabel('P(Dv)')
+    plt.xlabel('D [microns]')
+    plt.savefig(savedir + 'aerosol_distributions/RH_pdfs_'+str(thresh)+'thresh.png')
+    plt.close(fig)
 
     # ==============================================================================
     # Plotting
