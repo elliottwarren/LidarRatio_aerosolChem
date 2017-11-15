@@ -37,6 +37,8 @@ from forward_operator import FOUtils as FO
 from forward_operator import FOconstants as FOcon
 
 
+# Reading and reformatting
+
 def read_headers(filepath, startswith, delimiter):
     """
     A very specific function for the N(D) data from the TSI APS at NK during ClearfLo
@@ -173,10 +175,11 @@ def read_aps(filepath_aps):
 
     return N, header_bins
 
-def calc_bin_parameters_aps(N):
+def calc_bin_parameters_aps(N, units='nm'):
 
     """
     Calculate bin parameters for the aps data
+    convert from microns to nm
     :param N:
     :return:
     """
@@ -187,10 +190,10 @@ def calc_bin_parameters_aps(N):
     del D_keys[D_keys.index('Total')]  # remove time so we just get bin widths
     D_min = deepcopy(D_keys)
     D_min = np.array(D_min, dtype=float)
-    D_min = np.sort(D_min)
+    D_min = np.sort(D_min) * 1e3
 
     # upper edge on last bin is 21.29 microns, therefore append it on the end
-    D_max = np.append(D_min[1:], 21.29)
+    D_max = np.append(D_min[1:], 21.29*1e3)
 
     # mid bin
     D = (D_max + D_min) / 2.0
@@ -200,7 +203,97 @@ def calc_bin_parameters_aps(N):
     dD = D_max - D_min
     dlogD = np.log10(D_max) - np.log10(D_min)
 
+    # # convert from microns to nm
+    # didn't work for the dlogD one...
+    # if units == 'nm':
+    #
+    #     D *= 1e3
+    #     dD *= 1e3
+    #     logD *= 1e3
+    #     dlogD *= 1e3
+
     return D, dD, logD, dlogD
+
+# processing / conversions
+
+def calc_dNdlogD_from_N_aps(aps_N, aps_D, aps_dlogD, aps_header_bins):
+
+    """
+    Calculate dNdlogD from the basic N data, for the aps instrument
+    :param aps_N:
+    :param aps_D:
+    :param aps_dlogD:
+    :param aps_header_bins:
+    :return: dNdlogD
+    """
+
+    aps_dNdlogD = {'time': aps_N['time']}
+    for idx in range(len(aps_D)):
+        # get bin name (start of bin for aps data annoyingly...), dlogD and D for each data column
+        # convert bin ranges from microns to nm
+        bin_i = aps_header_bins[idx]
+        dlogD_i = aps_dlogD[idx]
+        D_i = aps_D[idx]
+
+        aps_dNdlogD[str(D_i)] = aps_N[bin_i] / dlogD_i
+
+    return aps_dNdlogD
+
+def merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D):
+
+    """
+    Merge the dmps and aps dNdlogD datasets together, such a a 2D array called 'binned' is in the new dNdlogD array
+    :param dmps_dNdlogD:
+    :param dmps_D:
+    :param aps_dNdlogD:
+    :param aps_D:
+    :return:
+    """
+
+    # time range - APS time res: 5 min, DMPS time res: ~12 min
+    start_time = np.min([aps_dNdlogD['time'][0], dmps_dNdlogD['time'][0]])
+    end_time = np.max([aps_dNdlogD['time'][-1], dmps_dNdlogD['time'][-1]])
+    time_range = eu.date_range(start_time, end_time, 15, 'minutes')
+
+    # binned shape = [time, bin]
+    dNdlogD = {'time': time_range,
+               'binned': np.empty([len(time_range), len(dmps_D) + len(aps_D)])}
+    dNdlogD['binned'][:] = np.nan
+
+    # insert the dmps data first, take average of all data within the time period
+    for t in range(len(time_range)):
+
+        for D_idx in range(len(dmps_D)):  # smaller data fill the first columns
+
+            # enumerate might be useful here...
+
+            # find data for this time
+            # find data for this time
+            binary = np.logical_and(dmps_dNdlogD['time'] > time_range[t],
+                                    dmps_dNdlogD['time'] < time_range[t] + dt.timedelta(minutes=15))
+
+            # bin str
+            D_i_str = str(dmps_D[D_idx])
+
+            # create mean of all data within the time period and store
+            dNdlogD['binned'][t, D_idx] = np.nanmean(dmps_dNdlogD[D_i_str][binary])
+
+        for D_idx in range(len(aps_D)):  # smaller data fill the first columns
+
+            # find data for this time
+            binary = np.logical_and(aps_dNdlogD['time'] > time_range[t],
+                                    aps_dNdlogD['time'] < time_range[t] + dt.timedelta(minutes=15))
+
+            # bin str
+            D_i_str = str(aps_D[D_idx])
+
+            # idx in new dNlogD array (data will go after the dmps data)
+            D_binned_idx = D_idx + len(dmps_D)
+
+            # create mean of all data within the time period and store
+            dNdlogD['binned'][t, D_binned_idx] = np.nanmean(aps_dNdlogD[D_i_str][binary])
+
+    return dNdlogD
 
 def main():
 
@@ -231,14 +324,6 @@ def main():
     site_bsc = {ceil: FOcon.site_bsc[ceil]}
     # site_bsc = {ceil: FOcon.site_bsc[ceil], 'CL31-E_BSC_NK': 27.0 - 23.2}
 
-    # day list
-    # clear sky days (5 Feb 2015 - 31 Dec 2016)
-    # daystrList = ['20160504']
-    # daystrList = ['20150414', '20150415', '20150421', '20150611', '20160504']
-    daystrList = ['20150415']
-
-    days_iterate = eu.dateList_to_datetime(daystrList)
-
     # ceilometer gate number to use for backscatter comparison
     # 1 - noisy
     # 2 - more stable
@@ -257,240 +342,227 @@ def main():
 
     ceil_data_i = {site: ceil_metadata[site]}
 
-    for day in days_iterate:
 
-        print 'day = ' + day.strftime('%Y-%m-%d')
+    # read in RH data
 
-        # def read_clearFlo_obsr_small():
 
-        # read in number distribution from observed data ---------------------------
 
-        # read in N data and extract relevent values
-        # make N at all heights away from surface nan to be safe
-        filepath = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/ClearfLo/' \
-                   'man-dmps_n-kensington_20120114_r0.na'
+    # read in number distribution from observed data ---------------------------
 
-        # read in the ClearfLo data
-        dmps_dNdlogD, dmps_header_bins = read_dmps(filepath)
+    # read in N data and extract relevent values
+    # make N at all heights away from surface nan to be safe
+    filepath = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/ClearfLo/' \
+               'man-dmps_n-kensington_20120114_r0.na'
 
-        # calculate bin centres (D_mid)
+    # read in the ClearfLo data
+    dmps_dNdlogD, dmps_header_bins = read_dmps(filepath)
 
-        dmps_D, dmps_dD, dmps_logD, dmps_dlogD = calc_bin_parameters_dmps(dmps_dNdlogD)
+    # calculate bin centres (D_mid)
 
-        # # check mid, widths start and ends are ok
-        # for i in range(len(widths_end)):
-        #     print str(widths_start[i]) + ' to ' + str(widths_end[i]) + ': mid = ' + str(D_mid[i]) + '; width = ' + str(widths[i])
+    dmps_D, dmps_dD, dmps_logD, dmps_dlogD = calc_bin_parameters_dmps(dmps_dNdlogD)
 
+    # # check mid, widths start and ends are ok
+    # for i in range(len(widths_end)):
+    #     print str(widths_start[i]) + ' to ' + str(widths_end[i]) + ': mid = ' + str(D_mid[i]) + '; width = ' + str(widths[i])
+
+
+    # -----------------------------------------------------------------------
+
+    # Read in aps data (larger radii: 0.5 to 20 microns)
+    filepath_aps = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/ClearfLo/' \
+                   'man-aps_n-kensington_20120110_r0.na'
+
+    # read in aps data (dictionary format)
+    # header bins will be lower bound of the bin, not the bin mid! (header_bins != aps_D)
+    aps_N, aps_header_bins = read_aps(filepath_aps)
+
+    # calculate bin parameters
+    # for the DMPS, the headers correspond to the min bin edge. Therefore, the header along is the bin max.
+    aps_D, aps_dD, aps_logD, aps_dlogD = calc_bin_parameters_aps(aps_N, units='nm')
+
+
+    # calc dNdlogD from N, for aps data (coarse)
+    aps_dNdlogD = calc_dNdlogD_from_N_aps(aps_N, aps_D, aps_dlogD, aps_header_bins)
+
+    # -----------------------------------------------------------------------
+
+    # merge the two dNdlogD datasets together...
+    # set up so data resolution is 15 mins
+    dNdlogD = merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D)
+
+    # merge the aerosol parameters together too
+    D = np.append(dmps_D, aps_D)
+    logD = np.append(dmps_logD, aps_logD)
+    dD = np.append(dmps_dD, aps_dD)
+    dlogD = np.append(dmps_dlogD, aps_dlogD)
+
+    # ==============================================================================
+    # Main processing of data
+    # ==============================================================================
+
+
+    # Set up the other aerosol distribution arrays in a similar style to dNdlogD (dictionaries with a 'binned' array)
+    # ToDo keep 'sum' for now, though it originally served a prupose it is redunden, check if it might still be useful
+    dVdD = {'time': dNdlogD['time'], 'binned': np.empty(dNdlogD['binned'].shape),
+            'sum': np.empty(len(dNdlogD['time'])), 'Dv': np.empty(len(dNdlogD['time']))}
+    dVdD['sum'][:] = np.nan
+    dVdD['binned'][:] = np.nan
+    dVdD['Dv'][:] = np.nan
+
+    dNdD = {'time': dNdlogD['time'], 'sum': np.empty(len(dNdlogD['time'])), 'binned': np.empty(dNdlogD['binned'].shape)}
+    dNdD['binned'][:] = np.nan
+    dNdD['sum'][:] = np.nan
+
+    # Volume mean diameter
+    dNdlogD['Dv'] = np.empty(len(dNdlogD['time']))
+    dNdlogD['Dv'][:] = np.nan # 2nd part of eqn for Dv
+    dNdlogD['Dv_accum'] = np.empty(len(dNdlogD['time']))
+    dNdlogD['Dv_accum'][:] = np.nan # 2nd part of eqn for Dv
+
+
+    dVdlogD = {'time': dNdlogD['time'], 'binned': np.empty(dNdlogD['binned'].shape),
+               'Dv': np.empty(len(dNdlogD['time']))}  # tester
+    dVdlogD['Dv'][:] = np.nan  # tester
+    dVdlogD['binned'][:] = np.nan
+
+    dNdlogD['Ntot'] = np.empty(len(dNdlogD['time'])) # total number of particles
+    dNdlogD['Ntot'][:] = np.nan
+    dNdlogD['Ntot_accum'] = np.empty(len(dNdlogD['time']))
+    dNdlogD['Ntot_accum'][:] = np.nan
+
+    # --------------------------------------
+
+    # calc dN/dD (n_N(Dp)) from dN/dlogD: Seinfeld and Pandis 2007 eqn 8.18
+    for i, D_i in enumerate(D):
+        # key = str(D_i)  # key for dictionary
+
+        logD_i = logD[i]
+
+        # dNdD[key] = dNdlogD[key] / (2.303 * D_i)  # calc nN(D) from nN(dlogD)
+        dNdD['binned'][:, i] = dNdlogD['binned'][:, i] / (2.303 * D_i)  # calc nN(D) from nN(dlogD)
 
         # -----------------------------------------------------------------------
+        # calc dV/dD from dN/dD (eqn 8.6)
+        dVdD['binned'][:, i] = (np.pi / 6.0) * (D_i ** 3.0) * dNdD['binned'][:, i]
 
-        # Read in aps data (larger radii: 0.5 to 20 microns)
-        filepath_aps = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/ClearfLo/' \
-                       'man-aps_n-kensington_20120110_r0.na'
+        # calc dV/dlogD from dN/dlogD (eqn 8.6)
+        dVdlogD['binned'][:, i] = (np.pi / 6.0) * (D_i ** 3.0) * dNdlogD['binned'][:, i]
 
-        # read in aps data (dictionary format)
-        # header bins will be lower bound of the bin, not the bin mid! (header_bins != aps_D)
-        aps_N, aps_header_bins = read_aps(filepath_aps)
+    # # calc dN/dD (n_N(Dp)) from dN/dlogD: Seinfeld and Pandis 2007 eqn 8.18
+    # first extract and store the value for the current t, from each bin
+    # create a sum entry for dVdD, adding together all values for a single time (sigma Nv)
+    # create a sum entry for dNdD (Ntot or sigma Ni)
+    for t in range(len(dNdD['time'])):
 
-        # calculate bin parameters
-        # for the DMPS, the headers correspond to the min bin edge. Therefore, the header along is the bin max.
-        aps_D, aps_dD, aps_logD, aps_dlogD = calc_bin_parameters_aps(aps_N)
+        # total_dN += [dNdD[key][t]]  # turn dN/dD into dN (hopefully)
+        # total_dV += [dVdD[key][t]]  # just dV/dD data
+        x4 = dNdlogD['binned'][t, :] * dlogD * (D ** 4.0)  # turn dN/dD into dN (hopefully)
+        y3 = dNdlogD['binned'][t, :] * dlogD * (D ** 3.0)  # just dV/dD data
 
-        # -----------------------------------------------------------------------
 
-        # calc dNdlogD from N, for aps data (coarse)
-        aps_dNdlogD = {}
-        for idx in range(len(aps_D)):
+        # once all bins for time t have been calculated, sum them up
+        dNdlogD['Dv'][t] = np.sum(x4)/np.sum(y3)
 
-            # get bin name (start of bin for aps data annoyingly...), dlogD and D for each data column
-            # convert bin ranges from microns to nm
-            bin_i = aps_header_bins[idx]
-            dlogD_i = aps_dlogD[idx] * 1e3
-            D_i = aps_D[idx] * 1e3
 
-            aps_dNdlogD[str(D_i)] = aps_N[bin_i]/ dlogD_i
+    # ==============================================================================
+    # Find Dv and N for the accum. range, for the aerFo
+    # ==============================================================================
 
-        # -----------------------------------------------------------------------
+    # NOTE! D is in nm
+    # try 0.02 to 0.7 microns first
+    accum_minD, accum_minD_idx, _ = eu.nearest(D, 20.0)
+    accum_maxD, accum_maxD_idx, _ = eu.nearest(D, 700.0)
+    accum_range_idx = range(accum_minD_idx, accum_maxD_idx + 1)
 
-        # merge the two dNdlogD datasets together...
-        # set up so data resolution is 15 mins
+    # Get volume mean diameter
+    for t in range(len(dNdD['time'])):
 
-        # time range - APS time res: 5 min, DMPS time res: ~12 min
-        start_time = np.min([aps_N['time'][0], dmps_dNdlogD['time'][0]])
-        end_time = np.max([aps_N['time'][-1], dmps_dNdlogD['time'][-1]])
-        time_range = eu.date_range(start_time, end_time, 15, 'minutes')
+        # total_dN += [dNdD[key][t]]  # turn dN/dD into dN (hopefully)
+        # total_dV += [dVdD[key][t]]  # just dV/dD data
+        x4 = dNdlogD['binned'][t, accum_range_idx] * dlogD[accum_range_idx] * (D[accum_range_idx] ** 4.0)  # turn dN/dD into dN (hopefully)
+        y3 = dNdlogD['binned'][t, accum_range_idx] * dlogD[accum_range_idx] * (D[accum_range_idx] ** 3.0)  # just dV/dD data
 
-        # binned shape = [time, bin]
-        dNdlogD = {'time': time_range,
-                   'binned': np.empty([len(time_range), len(dmps_D)+len(aps_D)])}
-        dNdlogD['binned'][:] = np.nan
+        # once all bins for time t have been calculated, sum them up
+        dNdlogD['Dv_accum'][t] = np.sum(x4)/np.sum(y3)
 
-        # insert the dmps data first, take average of all data within the time period
-        for t in range(len(time_range[:-1])):
+    # plot time series of r for defined acumm range
+    fig = plt.figure()
+    # plt.plot((dVdD['Dv'] * 1e-3) / 2, label='rv using dN/dD')
+    plt.plot((dNdlogD['Dv_accum'] * 1e-3) / 2, label='rv using dN/dlogD')
+    plt.ylabel('microns')
+    # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
+    plt.legend()
+    plt.savefig(savedir + 'aerosol_distributions/rv_accum_0p02_0p7.png')
+    # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
 
-            # find data for this time
-            binary = np.logical_and(dmps_dNdlogD['time'] > time_range[t], dmps_dNdlogD['time'] < time_range[t + 1])
+    # Get total number of particles (eqn 8.9)
+    for t in range(len(dNdD['time'])):
 
-            for D_idx in range(len(dmps_D)): # smaller data fill the first columns
+        dNdlogD['Ntot_accum'][t] = np.sum(dNdlogD['binned'][t, accum_range_idx] * dlogD[accum_range_idx])
 
-                # enumerate might be useful here...
-
-                # bin str
-                D_i_str = str(dmps_D[D_idx])
-
-                # create mean of all data within the time period and store
-                dNdlogD['binned'][t, D_idx] = np.nanmean(dmps_dNdlogD[D_i_str][binary])
-
-            for D_idx in range(len(aps_D)): # smaller data fill the first columns
-
-                # bin str
-                D_i_str = str(dmps_D[D_idx])
-
-                # idx in new dNlogD array (data will go after the dmps data)
-                D_binned_idx = D_idx + len(dmps_D)
-
-                # create mean of all data within the time period and store
-                dNdlogD['binned'][t, D_binned_idx] = np.nanmean(aps_dNdlogD[D_i_str][binary])
-
+    # plot time series of N for defined acumm range
+    fig = plt.figure()
+    # plt.plot((dVdD['Dv'] * 1e-3) / 2, label='rv using dN/dD')
+    plt.plot(dNdlogD['Ntot_accum'])
+    plt.ylabel('Ntot [cm-3]')
+    # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
+    plt.legend()
+    plt.savefig(savedir + 'aerosol_distributions/Ntot_accum_0p02_0p7.png')
+    # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
 
 
 
-        # -----------------------------------------------------------------------
+    # ==============================================================================
+    # Plotting
+    # ==============================================================================
 
-        # already have the times ready. Convert the dD np array to str and use them ask keys
-        # set up a 'sum' entry for Nv to sum up all the values for a single time. Will need it to calc Dv
-        # also set up a 'sum' entry for N_data (basically Ntot), again, will need it to calc Dv
-        dVdD = {'time': dNdlogD['time'], 'rawtime': dNdlogD['rawtime'],
-                'sum': np.empty(len(dNdlogD['time'])), 'Dv': np.empty(len(dNdlogD['time']))}
-        dVdD['sum'][:] = np.nan
-        dVdD['Dv'][:] = np.nan
+    # median, IQRs
+    dVdlogD['median'] = np.nanmedian(dVdlogD['binned'], axis=0)
+    dVdlogD['25th'] = np.nanpercentile(dVdlogD['binned'], 75, axis=0)
+    dVdlogD['75th'] = np.nanpercentile(dVdlogD['binned'], 25, axis=0)
 
-        dNdD = {'time': dNdlogD['time'], 'rawtime': dNdlogD['rawtime'], 'sum': np.empty(len(dNdlogD['time']))}
-        dNdD['sum'][:] = np.nan
+    # plot volume distribution for data (median with IQR)
+    fig = plt.figure()
+    plt.semilogx(D*1e-3, dVdlogD['median'], label='median', color='blue')
+    plt.vlines(0.5, 0, 3e10, linestyle='--', alpha=0.5)
+    plt.fill_between(D*1e-3, dVdlogD['25th'], dVdlogD['75th'], alpha=0.5, facecolor='blue', label='IQR')
+    plt.ylabel('dV/dlogD [nm3 cm-3]')
+    plt.xlabel('D [microns]')
+    # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
+    plt.legend()
+    plt.savefig(savedir + 'aerosol_distributions/dVdlogD_v_D_clearflo_winter_combined2.png')
+    # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
 
-        # to help calculate Dv (2 parts of an equation)
-        dNdlogD['Dv'] = np.empty(len(dNdlogD['time']))
-        # dNdlogD['y3'] = np.empty(len(dNdlogD['time']))
-        # dNdlogD['x4'][:] = np.nan # part of equation to calc Dv
-        dNdlogD['Dv'][:] = np.nan # 2nd part of eqn for Dv
+    # ------------------------------------------------
 
-        # Dv_data = {'time': dNdlogD['time'], 'rawtime': dNdlogD['rawtime'], 'Dv': np.empty(len(dNdlogD['time']))}
-        # Dv_data['Dv'][:] = np.nan
-        dVdlogD = {'time': dNdlogD['time'], 'rawtime': dNdlogD['rawtime'], 'Dv': np.empty(len(dNdlogD['time']))}  # tester
-        dVdlogD['Dv'][:] = np.nan  # tester
-        dNdlogD['sum'] = np.empty(len(dNdlogD['time']))
-        dNdlogD['sum'][:] = np.nan
+    # median, IQRs
+    dNdlogD['median'] = np.nanmedian(dNdlogD['binned'], axis=0)
+    dNdlogD['25th'] = np.nanpercentile(dNdlogD['binned'], 75, axis=0)
+    dNdlogD['75th'] = np.nanpercentile(dNdlogD['binned'], 25, axis=0)
 
-        # calc dN/dD (n_N(Dp)) from dN/dlogD: Seinfeld and Pandis 2007 eqn 8.18
-        for D_i in D:
-            key = str(D_i)  # key for dictionary
+    # plot volume distribution for data (median with IQR)
+    fig = plt.figure()
+    plt.semilogx(D, dNdlogD['median'], label='median', color='blue')
+    plt.vlines(500, 0, np.nanmax(dNdlogD['25th']), linestyle='--', alpha=0.5)
+    plt.fill_between(D, dNdlogD['25th'], dNdlogD['75th'], alpha=0.5, facecolor='blue', label='IQR')
+    plt.ylabel('dN/dlogD [cm-3]')
+    plt.xlabel('D [nm]')
+    # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
+    plt.legend()
+    plt.savefig(savedir + 'aerosol_distributions/dNdlogD_v_D_clearflo_winter_combo.png')
+    # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
 
-            dNdD[key] = dNdlogD[key] / (2.303 * D_i)  # calc nN(D) from nN(dlogD)
+    # ------------------------------------------------
 
-            # -----------------------------------------------------------------------
-            # calc dV/dD from dN/dD (eqn 8.6)
-            dVdD[key] = (np.pi / 6.0) * (D_i ** 3.0) * dNdD[key]
-
-        # first extract and store the value for the current t, from each bin
-        # create a sum entry for dVdD, adding together all values for a single time (sigma Nv)
-        # create a sum entry for dNdD (Ntot or sigma Ni)
-        for t in range(len(dNdD['time'])):  # was Nv_logD_data
-            x4 = []
-            y3 = []
-
-            for D_i, dlogD_i in zip(D, dlogD):
-                # total_dN += [dNdD[key][t]]  # turn dN/dD into dN (hopefully)
-                # total_dV += [dVdD[key][t]]  # just dV/dD data
-                key = str(D_i)
-                x4 += [dNdlogD[key][t] * dlogD_i * (D_i ** 4.0)]  # turn dN/dD into dN (hopefully)
-                y3 += [dNdlogD[key][t] * dlogD_i * (D_i ** 3.0)]  # just dV/dD data
-
-
-            # once all bins for time t have been calculated, sum them up
-            dNdlogD['Dv'][t] = np.sum(x4)/np.sum(y3)  # Ntotal for time(hopefully)
-
-        # # first extract and store the value for the current t, from each bin
-        # # create a sum entry for dVdD, adding together all values for a single time (sigma Nv)
-        # # create a sum entry for dNdD (Ntot or sigma Ni)
-        # for t in range(len(dNdD['time'])):  # was Nv_logD_data
-        #     total_dN = []
-        #     total_dV = []
-        #     for D_i, dD_i in zip(D, dD):
-        #         key = str(D_i)
-        #         # total_dN += [dNdD[key][t]]  # turn dN/dD into dN (hopefully)
-        #         # total_dV += [dVdD[key][t]]  # just dV/dD data
-        #         total_dN += [dNdD[key][t] * dD_i]  # turn dN/dD into dN (hopefully)
-        #         total_dV += [dVdD[key][t] * dD_i]  # just dV/dD data
-        #
-        #     dNdD['sum'][t] = np.sum(total_dN)  # Ntotal for time(hopefully)
-        #     dVdD['sum'][t] = np.sum(total_dV)  # sum of dv/dD for all size bins for later
-        #
-        # # calculate volume mean diameter
-        # for t in range(len(dVdD['time'])):
-        #     # dVdD['Dv'][t] = (dVdD['sum'][t] / (dNdD['sum'][t] * (np.pi / 6.0))) ** 1. / 3.
-        #     dVdD['Dv'][t] = (dVdD['sum'][t] / (dNdD['sum'][t] * (np.pi / 6.0))) ** 1. / 3.
-
-
-        # data is 2D array [time, bin]
-        # allow for soem time based stats to be used
-        dVdlogD['binned'] = np.squeeze(np.array([
-                            [np.array([dVdD[str(D_i)][j] for D_i in D])]
-                            for j in range(len(dNdD['time']))]))
-
-
-
-        # plt.semilogx(D, (np.array(dVdlogD['binned'][0]) * 1e-3) / 2)
-
-        # median, IQRs
-        dVdlogD['median'] = np.nanmedian(dVdlogD['binned'], axis=0)
-        dVdlogD['25th'] = np.nanpercentile(dVdlogD['binned'], 75, axis=0)
-        dVdlogD['75th'] = np.nanpercentile(dVdlogD['binned'], 25, axis=0)
-
-        # plot volume distribution for data (median with IQR)
-        fig = plt.figure()
-        plt.semilogx(D*1e-3, dVdlogD['median'], label='median', color='blue')
-        plt.fill_between(D*1e-3, dVdlogD['25th'], dVdlogD['75th'], alpha=0.5, facecolor='blue', label='IQR')
-        plt.ylabel('dV/dlogD')
-        plt.xlabel('D [microns]')
-        # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
-        plt.legend()
-        plt.savefig(savedir + 'aerosol_distributions/dVdlogD_v_D_clearflo_winter.png')
-        # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
-
-        # ------------------------------------------------
-
-        # create 2D array of data
-        dNdlogD['binned'] = np.squeeze(np.array([
-                            [np.array([dNdD[str(D_i)][j] for D_i in D])]
-                            for j in range(len(dNdD['time']))]))
-
-        # median, IQRs
-        dNdlogD['median'] = np.nanmedian(dNdlogD['binned'], axis=0)
-        dNdlogD['25th'] = np.nanpercentile(dNdlogD['binned'], 75, axis=0)
-        dNdlogD['75th'] = np.nanpercentile(dNdlogD['binned'], 25, axis=0)
-
-        # plot volume distribution for data (median with IQR)
-        fig = plt.figure()
-        plt.semilogx(D*1e-3, dNdlogD['median'], label='median', color='blue')
-        plt.fill_between(D*1e-3, dNdlogD['25th'], dNdlogD['75th'], alpha=0.5, facecolor='blue', label='IQR')
-        plt.ylabel('dN/dlogD')
-        plt.xlabel('D [microns]')
-        # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
-        plt.legend()
-        plt.savefig(savedir + 'aerosol_distributions/dNdlogD_v_D_clearflo_winter.png')
-        # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
-
-        # ------------------------------------------------
-
-        # plot time series of r
-        fig = plt.figure()
-        # plt.plot((dVdD['Dv'] * 1e-3) / 2, label='rv using dN/dD')
-        plt.plot((dNdlogD['Dv'] * 1e-3) / 2, label='rv using dN/dlogD')
-        plt.ylabel('microns')
-        # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
-        plt.legend()
-        plt.savefig(savedir + 'aerosol_distributions/rv_Ben_help.png')
-        # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
+    # plot time series of r
+    fig = plt.figure()
+    # plt.plot((dVdD['Dv'] * 1e-3) / 2, label='rv using dN/dD')
+    plt.plot((dNdlogD['Dv'] * 1e-3) / 2, label='rv using dN/dlogD')
+    plt.ylabel('microns')
+    # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
+    plt.legend()
+    plt.savefig(savedir + 'aerosol_distributions/rv_Ben_help.png')
+    # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
 
     return
 
