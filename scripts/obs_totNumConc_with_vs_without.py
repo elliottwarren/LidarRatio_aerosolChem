@@ -10,6 +10,7 @@ import matplotlib.cm
 import matplotlib as mpl
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.ticker import FormatStrFormatter
+from matplotlib.dates import DateFormatter
 
 import numpy as np
 import datetime as dt
@@ -22,6 +23,34 @@ import colorsys
 import ellUtils as eu
 from forward_operator import FOUtils as FO
 from forward_operator import FOconstants as FOcon
+
+
+def read_headers(filepath):
+    """
+    A very specific function for the N(D) data from the TSI APS at NK during ClearfLo
+    The headers are a bit awkward so, this function finds and pulls them based on the first
+    header being 'Date' and no other lines beginning with it.
+
+    :param Nfilepath:
+    :return: headers
+    """
+
+    f = open(filepath, 'r')
+    line = f.readline()
+    while line.startswith('Time 5.0125') != True:
+        line = f.readline()
+
+    f.close()
+
+    # remove '\n' off the end of [line]
+    line = line[:-2]
+
+    split = np.array(line.split(' '))  # split headers up and turn into numpy array
+    # remove empty headers and '\n'
+    idx = np.logical_or(split == '', split == '\n')  # bad headers
+    headers = split[~idx]  # remove bad headers
+
+    return headers
 
 def create_stats_entry(site_id, statistics={}):
 
@@ -56,6 +85,7 @@ def create_stats_entry(site_id, statistics={}):
                                'rh_obs': [],
                                'back_diff_log': [],
                                'back_diff_norm': [],
+                               'ratio': [],
                                'back_obs': [],
                                'back_mod': [],
                                'RMSE': [],
@@ -104,156 +134,150 @@ def get_nearest_ceil_mod_height_idx(mod_height, obs_height, ceil_gate_num):
 
     return ceil_gate_idx, mod_height_idx
 
-def plot_back_point_diff(stats_site, savedir, model_type, ceil_gate_num, ceil, sampleSize, corr, var_type, c_type='hr', extra=''):
-
-    """
-    Plot the rh or aer difference vs backscatter diff
-    :return:
-    """
-
-    # variable plotting against backscatter point diff
-    if var_type == 'aerosol':
-        var_diff = stats_site['aer_diff']
-    elif var_type == 'RH':
-        var_diff = stats_site['rh_diff']
-
-    # backscatter point difference
-    back_point_diff = stats_site['back_diff_norm']
-    # back_point_diff = stats_site['back_diff_log']
-
-    fig = plt.figure(figsize=(6, 3.5))
-    ax = plt.subplot2grid((1, 1), (0, 0))
-
-    # variable specific labels and names
-    if var_type == 'RH':
-        xlab = r'$Difference \/\mathrm{(RH_{ukv} - RH_{obs})}$'
-
-    elif var_type == 'aerosol':
-        xlab = r'$Difference \/\mathrm{(m_{MURK} - PM_{10})}$'
-
-    # define the colormap
-    cmap, norm = discrete_colour_map(40, 100, 13)
-
-    # plot data
-    scat = plt.scatter(var_diff, back_point_diff, c=stats_site[c_type], s=6, vmin=40.0, vmax=100.0, cmap=cmap, norm=norm)
-
-    # add 0 lines
-    ax.axhline(linestyle='--', color='grey', alpha=0.5)
-    ax.axvline(linestyle='--', color='grey', alpha=0.5)
-
-    # ax.set_ylim([-5e-06, 5e-06])
-
-    # add colourbar on the side
-    divider = make_axes_locatable(ax)
-    cax = divider.append_axes("right", size="5%", pad=0.05)
-    cbar = plt.colorbar(scat, cax=cax, norm=norm)
-    cbar.set_label(r'$RH\/[\%]$', labelpad=-38, y=1.075, rotation=0)
 
 
-    ax.set_xlabel(xlab)
-    ax.set_ylim([-1e-5, 1e-5])
-    # ax.set_ylabel(r'$Difference \/\mathrm{(log_{10}(\beta_m) - log_{10}(\beta_o))}$')
-    ax.set_ylabel(r'$Difference \/\mathrm{(\beta_m - \beta_o)}$')
-    ax.yaxis.set_major_formatter(FormatStrFormatter('%.1e'))
+def plot_multiple_back_point_diffs(day, aerFO_version, savedir, site_id,
+                                   statistics_modN_modr, statistics_modN_pm10r, statistics_obsN_pm10r,
+                                   statistics_obsN_modr):
 
-    # Fake a ScalarMappable so I can display a colormap
-    # cmap, norm = mcolors.from_levels_and_colors(range(24 + 1), rgb)
-    # sm = matplotlib.cm.ScalarMappable(cmap=cmap, norm=norm)
-    # sm.set_array([])
-    # fig.colorbar(sm)
-    # plt.colorbar()
+    # Line plots of each
+    fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+    ax.axhline(linestyle='--', color='blue', alpha=0.3)  # 0 line
+    plt.plot_date(statistics_modN_modr[site_id]['datetime'], statistics_modN_modr[site_id]['back_diff_norm'],
+                  label='modN modr', fmt='-')
+    plt.plot_date(statistics_modN_pm10r[site_id]['datetime'], statistics_modN_pm10r[site_id]['back_diff_norm'],
+                  label='modN pm10r', fmt='-')
+    plt.plot_date(statistics_obsN_pm10r[site_id]['datetime'], statistics_obsN_pm10r[site_id]['back_diff_norm'],
+                  label='obsN pm10r', fmt='-')
+    plt.plot_date(statistics_obsN_modr[site_id]['datetime'], statistics_obsN_modr[site_id]['back_diff_norm'],
+                  label='obsN modr', fmt='-')
 
-    fig.suptitle(ceil + '; n = ' + str(sampleSize) + '; r = ' + '{:1.2f}'.format(corr['r']) +
-                 '; p = ' + '%1.2f' % corr['p'])
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.90)
-    plt.savefig(savedir + 'point_diff/' +
-                model_type + '_' + var_type + '_diff_' + ceil + '_clearDays_gate' + str(ceil_gate_num) + '_c' + c_type +
-                '_' + extra + '.png')  # filename
+    # prettify
+    plt.xlabel('Time [HH]')
+    plt.xlim([np.min(statistics_modN_modr[site_id]['datetime']), np.max(statistics_modN_modr[site_id]['datetime'])])
+    plt.ylabel(r'$\beta \/\/Difference \/[m^{-1} sr^{-1}]$')
+    ax.set_yticklabels(["{:.1e}".format(t) for t in ax.get_yticks()])  # standard form
+    plt.legend()
+    plt.suptitle(day.strftime('%Y-%m-%d') + '; modN_0 = 10668 cm-3; ' + aerFO_version)
+    ax.xaxis.set_major_formatter(DateFormatter('%H:%M'))
 
-    plt.close(fig)
+    # Is it the Best or MORUSES urban scheme?
+    if day < dt.datetime(2016, 3, 15):
+        eu.add_at(ax, r'$Best$', loc=2)
+    else:
+        eu.add_at(ax, r'$MORUSES$', loc=2)
+
+    plt.tight_layout(pad=2)
+    plt.savefig(savedir +'betadiff_' +day.strftime('%Y%m%d') + '_modN_obsN_pm10r_combo.png')
+
+    plt.close('all')
 
     return
 
-def plot_back_point_diff_6hr(var_diff, back_point_diff, savedir, model_type, ceil_gate_num, ceil, sampleSize, corr, var_type):
+def plot_multiple_back_point_ratio(day, aerFO_version, savedir, site_id,
+                                   statistics_modN_modr, statistics_modN_pm10r, statistics_obsN_pm10r,
+                                   statistics_obsN_modr):
 
-    """
-    Plot the rh or aer difference vs backscatter diff
-    :return:
-    """
+    # Line plots of each
+    fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+    ax.axhline(y=1.0, linestyle='--', color='blue', alpha=0.3)  # 0 line
+    plt.plot_date(statistics_modN_modr[site_id]['datetime'], statistics_modN_modr[site_id]['ratio'],
+                  label='modN modr', fmt='-')
+    plt.plot_date(statistics_modN_pm10r[site_id]['datetime'], statistics_modN_pm10r[site_id]['ratio'],
+                  label='modN pm10r', fmt='-')
+    plt.plot_date(statistics_obsN_pm10r[site_id]['datetime'], statistics_obsN_pm10r[site_id]['ratio'],
+                  label='obsN pm10r', fmt='-')
+    plt.plot_date(statistics_obsN_modr[site_id]['datetime'], statistics_obsN_modr[site_id]['ratio'],
+                  label='obsN modr', fmt='-')
 
-    rgb = colour_range(24)
+    # prettify
+    plt.xlabel('Time [HH]')
+    plt.xlim([np.min(statistics_modN_modr[site_id]['datetime']), np.max(statistics_modN_modr[site_id]['datetime'])])
+    plt.ylabel(r'$\beta \/\/Ratio \/[\beta_{m} / \beta_{o}]$')
+    # ax.set_yticklabels(["{:.1e}".format(t) for t in ax.get_yticks()])  # standard form
+    plt.legend()
+    plt.suptitle(day.strftime('%Y-%m-%d') + '; modN_0 = 10668 cm-3; ' + aerFO_version)
+    ax.xaxis.set_major_formatter(DateFormatter('%H:%M'))
 
-    fig = plt.figure(figsize=(6, 3.5))
-    ax = plt.subplot2grid((1, 1), (0, 0))
+    # Is it the Best or MORUSES urban scheme?
+    if day < dt.datetime(2016, 3, 15):
+        eu.add_at(ax, r'$Best$', loc=2)
+    else:
+        eu.add_at(ax, r'$MORUSES$', loc=2)
 
-    # variable specific labels and names
-    if var_type == 'RH':
-        xlab = r'$Difference \/\mathrm{(RH_{ukv} - RH_{obs})}$'
+    plt.tight_layout(pad=2)
+    plt.savefig(savedir +'betaratio_' +day.strftime('%Y%m%d') + '_modN_obsN_pm10r_combo.png')
 
-    elif var_type == 'aerosol':
-        xlab = r'$Difference \/\mathrm{(m_{MURK} - PM_{10})}$'
+    plt.close('all')
 
-    for t in [0,6,12,18]:
+    return
 
-        t_range = np.arange(t, t+6)
 
-        for t_i in t_range:
+def plot_Ns(day, aerFO_version, savedir, site_id,
+            mod_data_modN_modr, mod_data_modN_pm10r, mod_data_obsN_pm10r,
+            mod_data_obsN_modr):
 
-            hr = str(t_i)
+    # Line plots of each N
+    fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+    plt.plot_date(mod_data_modN_modr[site_id]['time'], mod_data_modN_modr[site_id]['N'][:, 1],
+                  label='modN', fmt='-')
+    plt.plot_date(mod_data_obsN_modr[site_id]['time'], mod_data_obsN_modr[site_id]['N'][:, 1],
+                  label='obsN', fmt='-')
 
-            # hr_colour = rgb[t]
+    # prettify
+    plt.xlabel('Time [HH]')
+    plt.xlim([np.min(mod_data_modN_modr[site_id]['time']), np.max(mod_data_modN_modr[site_id]['time'])])
+    plt.ylabel(r'$Total number concentration [m-3]$')
+    ax.set_yticklabels(["{:.1e}".format(t) for t in ax.get_yticks()])  # standard form
+    plt.legend()
+    plt.suptitle(day.strftime('%Y-%m-%d') + '; modN_0 = 10668 cm-3; ' + aerFO_version)
+    ax.xaxis.set_major_formatter(DateFormatter('%H:%M'))
 
-            plt.scatter(var_diff[hr], back_point_diff[hr], s=4)
+    # Is it the Best or MORUSES urban scheme?
+    if day < dt.datetime(2016, 3, 15):
+        eu.add_at(ax, r'$Best$', loc=2)
+    else:
+        eu.add_at(ax, r'$MORUSES$', loc=2)
 
-        ax.set_xlabel(xlab)
-        ax.set_ylabel(r'$Difference \/\mathrm{(log_{10}(\beta_m) - log_{10}(\beta_o))}$')
+    plt.tight_layout(pad=2)
+    plt.savefig(savedir + 'N_' + day.strftime('%Y%m%d') + '_modN_obsN_pm10r_combo.png')
 
-        # # Fake a ScalarMappable so I can display a colormap
-        # cmap, norm = mcolors.from_levels_and_colors(range(6 + 1), rgb)
-        # sm = matplotlib.cm.ScalarMappable(cmap=cmap, norm=norm)
-        # sm.set_array([])
-        # fig.colorbar(sm)
+    plt.close('all')
 
-        fig.suptitle(ceil + '; n = ' + str(sampleSize) + '; r = ' + '{:1.2f}'.format(corr['r']) +
-                     '; p = ' + '%1.2f' % corr['p'])
-        plt.tight_layout()
-        plt.subplots_adjust(top=0.90)
-        plt.savefig(savedir + 'point_diff/' +
-                    model_type + '_' + var_type + '_diff_' + ceil + '_clearDays_gate' + str(ceil_gate_num) + 't'+str(t)+'.png')  # filename
+    return
 
-    return fig
+def plot_r_mds(day, aerFO_version, savedir, site_id,
+            mod_data_modN_modr, mod_data_modN_pm10r, mod_data_obsN_pm10r,
+            mod_data_obsN_modr):
 
-def colour_range(num_colours=24.0):
+    # Line plots of each N
+    fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+    plt.plot_date(mod_data_modN_modr[site_id]['time'], mod_data_modN_modr[site_id]['r_md'][:, 1] ,
+                  label='modr', fmt='-')
+    plt.plot_date(mod_data_modN_pm10r[site_id]['time'], mod_data_modN_pm10r[site_id]['r_md'][:, 1],
+                  label='pm10r', fmt='-')
 
-    """Makes a simple range of colours"""
+    # prettify
+    plt.xlabel('Time [HH]')
+    plt.xlim([np.min(mod_data_modN_modr[site_id]['time']), np.max(mod_data_modN_modr[site_id]['time'])])
+    plt.ylabel(r'$radius [m]$')
+    ax.set_yticklabels(["{:.1e}".format(t) for t in ax.get_yticks()])  # standard form
+    plt.legend()
+    plt.suptitle(day.strftime('%Y-%m-%d') + '; modN_0 = 10668 cm-3; ' + aerFO_version)
+    ax.xaxis.set_major_formatter(DateFormatter('%H:%M'))
 
-    for i in range(num_colours):
+    # Is it the Best or MORUSES urban scheme?
+    if day < dt.datetime(2016, 3, 15):
+        eu.add_at(ax, r'$Best$', loc=2)
+    else:
+        eu.add_at(ax, r'$MORUSES$', loc=2)
 
-        rgb = [colorsys.hsv_to_rgb(i / (num_colours*3.0), 1.0, 1.0) for i in range(num_colours)]
+    plt.tight_layout(pad=2)
+    plt.savefig(savedir + 'r_md_' + day.strftime('%Y%m%d') + '_modN_obsN_pm10r_combo.png')
 
-        # rgb = colorsys.hsv_to_rgb(i / 72.0, 1.0, 1.0)
-        # print(i, [round(255 * x) for x in rgb])
+    plt.close('all')
 
-        return rgb
-
-def discrete_colour_map(lower_bound, upper_bound, spacing):
-
-    """Create a discrete colour map"""
-
-    cmap = plt.cm.jet
-    # extract all colors from the .jet map
-    cmaplist = [cmap(i) for i in range(cmap.N)]
-    # force the first color entry to be grey
-    # cmaplist[0] = (.5, .5, .5, 1.0)
-    # create the new map
-    cmap = cmap.from_list('Custom cmap', cmaplist, cmap.N)
-
-    # define the bins and normalize
-    bounds = np.linspace(lower_bound, upper_bound, spacing)
-    norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
-
-    return cmap, norm
+    return
 
 def main():
 
@@ -317,7 +341,8 @@ def main():
 
     # day list
     # clear sky days (5 Feb 2015 - 31 Dec 2016)
-    daystrList = ['20160504']
+    # daystrList = ['20150414', '20150415', '20150421', '20150611', '20160504']
+    daystrList = ['20120202']
 
     days_iterate = dateList_to_datetime(daystrList)
 
@@ -330,11 +355,6 @@ def main():
 
     # where to pull rh height out.
     mod_rh_height_idx = 1
-
-    # define statistics dictionary
-    statistics_modN = {}
-    statistics_obsN = {}
-    sampleSize = 0 # add to this
 
 
     # ==============================================================================
@@ -351,28 +371,49 @@ def main():
 
     for day in days_iterate:
 
+        # define statistics dictionary
+        statistics_modN_modr = {}
+        statistics_modN_pm10r = {}
+        statistics_obsN_pm10r = {}
+        statistics_obsN_modr = {}
+        sampleSize = 0  # add to this
+
         print 'day = ' + day.strftime('%Y-%m-%d')
+
 
         # Read UKV forecast and automatically run the FO
 
         # extract MURK aerosol and calculate RH for each of the sites in the ceil metadata
         # reads all london model data, extracts site data, stores in single dictionary
+
+        # testing with Chilbolton
+        mod_data_obsN_modr = FO.mod_site_extract_calc(day, ceil_data_i, modDatadir, model_type, res, 910, version=0.2,
+                        allvars=True, obsN_site='Chilbolton', obsr_site='Chilbolton')
+
         # 1
         mod_data_modN_modr = FO.mod_site_extract_calc(day, ceil_data_i, modDatadir, model_type, res, 910, version=0.2,
                         allvars=True)
+
+        #print 'modN_pm10r started...'
         # 2
         mod_data_modN_pm10r = FO.mod_site_extract_calc(day, ceil_data_i, modDatadir, model_type, res, 910, version=0.2,
-                        allvars=True, obsr_site='NK')
-
+                         allvars=True, pm10r_site='NK')
         #
+        # #print 'obsN_pm10r started...'
+        # #
         mod_data_obsN_pm10r = FO.mod_site_extract_calc(day, ceil_data_i, modDatadir, model_type, res, 910, version=0.2,
-                        allvars=True, obsN_site='NK', obsr_site='NK')
+                         allvars=True, obsN_site='NK', pm10r_site='NK')
+        #
+        # #
+        mod_data_obsN_modr = FO.mod_site_extract_calc(day, ceil_data_i, modDatadir, model_type, res, 910, version=0.2,
+                         allvars=True, obsN_site='NK')
+
 
         # Read ceilometer backscatter
 
-        # will only read in data is the site is there!
+        # will only read in data if the site is there!
         # ToDo Remove the time sampling part and put it into its own function further down.
-        bsc_obs = FO.read_ceil_obs(day, site_bsc, ceilDatadir, mod_data_modN, calib=True)
+        bsc_obs = FO.read_ceil_obs(day, site_bsc, ceilDatadir, mod_data_modN_modr, calib=True)
 
         #
         # if pm10_stats == True:
@@ -400,15 +441,14 @@ def main():
                  get_nearest_ceil_mod_height_idx(mod_data_modN_modr[site_id]['level_height'], bsc_site_obs['height'], ceil_gate_num)
 
             # create entry in the dictionary if one does not exist
-            statistics_modN_modr = create_stats_entry(site_id, statistics_modN)
-            statistics_modN_pm10r = create_stats_entry(site_id, statistics_modN)
-            statistics_obsN_pm10r = create_stats_entry(site_id, statistics_obsN)
+            statistics_modN_modr = create_stats_entry(site_id, statistics_modN_modr)
+            statistics_modN_pm10r = create_stats_entry(site_id, statistics_modN_pm10r)
+            statistics_obsN_pm10r = create_stats_entry(site_id, statistics_obsN_pm10r)
+            statistics_obsN_modr = create_stats_entry(site_id, statistics_obsN_modr)
 
             # for the different combos of mod_data
-            for statistics, mod_data_set in zip((statistics_modN_modr, statistics_modN_pm10r, statistics_obsN_pm10r),
-                                    (mod_data_modN_modr,   mod_data_modN_pm10r,   mod_data_obsN_pm10r)):
-
-
+            for statistics, mod_data_set in zip((statistics_modN_modr, statistics_modN_pm10r, statistics_obsN_pm10r, statistics_obsN_modr),
+                                                (mod_data_modN_modr,   mod_data_modN_pm10r,   mod_data_obsN_pm10r, mod_data_obsN_modr)):
 
                 # for each hour possible in the day
                 for t in np.arange(0, 24):
@@ -419,129 +459,43 @@ def main():
                     statistics[site_id]['hr'] += [t]
                     statistics[site_id]['datetime'] += [mod_data_set[site]['time'][t]]
 
-                    statistics_obsN[site_id]['hr'] += [t]
-                    statistics_obsN[site_id]['datetime'] += [mod_data_set[site]['time'][t]]
-
-                    # extract out all unique pairs below the upper height limit
-                    # these are time and height matched now
-                    #obs_x = bsc_site_obs['backscatter'][t, obs_hc_unique_pairs]
-                    #mod_y = mod_data[site_id]['backscatter'][t, mod_hc_unique_pairs]
-
-                    # # extract pairs of values used in statistics
-                    # if pm10_stats == True:
-                    #     pm10_i = pm10['PM10_'+site]['pm_10'][t]
-                    #     # murk_i = mod_data[site]['aerosol_for_visibility'][t, 0] # 0th height = 5 m
-                    #
-                    # if rh_stats == True:
-                    #     rh_obs_i = rh_obs[rh_instrument]['RH'][t]
-
                     # get murk_i and rh_i regardless if pm10_stats and rh_stats is True or not
-                    murk_i = mod_data_modN[site]['aerosol_concentration_dry_air'][t, 0]  # 0th height = 5 m
-                    rh_mod_i = mod_data_modN[site]['RH'][t, mod_rh_height_idx] * 100.0  # convert from [fraction] to [%]
+                    murk_i = mod_data_set[site]['aerosol_concentration_dry_air'][t, 0]  # 0th height = 5 m
+                    rh_mod_i = mod_data_set[site]['RH'][t, mod_rh_height_idx] * 100.0  # convert from [fraction] to [%]
 
                     obs_back_i = bsc_site_obs['backscatter'][t, ceil_height_idx]
-                    mod_back_modN_i = mod_data_modN[site]['backscatter'][t, mod_height_idx]
-                    mod_back_obsN_i = mod_data_obsN[site]['backscatter'][t, mod_height_idx]
+                    mod_back_set_i = mod_data_set[site]['backscatter'][t, mod_height_idx]
 
-                    statistics_modN[site_id]['back_obs'] += [obs_back_i]
-                    statistics_modN[site_id]['back_mod'] += [mod_back_modN_i]
-                    statistics_obsN[site_id]['back_obs'] += [obs_back_i]
-                    statistics_obsN[site_id]['back_mod'] += [mod_back_obsN_i]
+                    statistics[site_id]['back_obs'] += [obs_back_i]
+                    statistics[site_id]['back_mod'] += [mod_back_set_i]
 
-                    statistics_modN[site_id]['aer_mod'] += [murk_i]
-                    statistics_modN[site_id]['rh_mod'] += [rh_mod_i]
-                    statistics_obsN[site_id]['aer_mod'] += [murk_i]
-                    statistics_obsN[site_id]['rh_mod'] += [rh_mod_i]
-
-                    # STATISTICS
-                    # ---------------
-
-                    # # length of aer_diff[hr] and ['back_point_diff'] hour should and MUST be the same length
-                    # # such that their idx positions line up
-                    # if pm10_stats == True:
-                    #     statistics[site_id]['aer_diff'] += [murk_i - pm10_i]
-                    #     statistics[site_id]['aer_obs'] += [pm10_i]
-                    #
-                    #     # if the difference pairs do not posses an NaN (and will therefore be plotted), add 1 to sample size
-                    #     if ~np.isnan(murk_i - pm10_i) & ~np.isnan(np.log10(mod_back_i) - np.log10(obs_back_i)):
-                    #         sampleSize += 1
-                    #
-                    # if rh_stats == True:
-                    #     statistics[site_id]['rh_diff'] += [rh_mod_i - rh_obs_i]
-                    #     statistics[site_id]['rh_obs'] += [rh_obs_i]
-                    #
-                    #     # if the difference pairs do not posses an NaN (and will therefore be plotted), add 1 to sample size
-                    #     if ~np.isnan(rh_mod_i - rh_obs_i) & ~np.isnan(np.log10(mod_back_i) - np.log10(obs_back_i)):
-                    #         sampleSize += 1
-
+                    statistics[site_id]['aer_mod'] += [murk_i]
+                    statistics[site_id]['rh_mod'] += [rh_mod_i]
 
                     # all extra stats slots
-                    statistics_modN[site_id]['back_diff_log'] += [np.log10(mod_back_modN_i) - np.log10(obs_back_i)]
-                    statistics_modN[site_id]['back_diff_norm'] += [mod_back_modN_i - obs_back_i]
-
-                    statistics_obsN[site_id]['back_diff_log'] += [np.log10(mod_back_obsN_i) - np.log10(obs_back_i)]
-                    statistics_obsN[site_id]['back_diff_norm'] += [mod_back_obsN_i - obs_back_i]
+                    statistics[site_id]['back_diff_log'] += [np.log10(mod_back_set_i) - np.log10(obs_back_i)]
+                    statistics[site_id]['back_diff_norm'] += [mod_back_set_i - obs_back_i]
+                    statistics[site_id]['ratio'] += [mod_back_set_i / obs_back_i]
 
 
+            # Plot once statistics are done...
 
-    # # quick remove RH > 80
-    # val = 80.0
-    # idx_lt = np.where(np.array(statistics_modN[site_id]['rh_mod']) <= val)
-    #
-    # for key in statistics[site_id].iterkeys():
-    #     if len(statistics[site_id][key]) != 0:
-    #         for i in idx_lt[0]:
-    #             statistics[site_id][key][i] = np.nan
-    # sampleSize -= len(idx_lt[0])
+            # Line plots of each
+            plot_multiple_back_point_diffs(day, FOcon.aerFO_version, savedir, site_id,
+                statistics_modN_modr, statistics_modN_pm10r, statistics_obsN_pm10r, statistics_obsN_modr)
 
+            plot_multiple_back_point_ratio(day, FOcon.aerFO_version, savedir, site_id,
+                statistics_modN_modr, statistics_modN_pm10r, statistics_obsN_pm10r, statistics_obsN_modr)
 
-    # # do correlation
-    # if rh_stats == True:
-    #     corr = {}
-    #     corr['r'], corr['p'] = spearmanr(statistics[site_id]['rh_diff'], statistics[site_id]['back_diff_norm'], nan_policy='omit')
-    #     a1 = np.array(statistics[site_id]['aer_mod']) # extract the rh difference dataset from statistics
-    #
-    # if pm10_stats == True:
-    #     corr = {}
-    #     corr['r'], corr['p'] = spearmanr(statistics[site_id]['aer_diff'], statistics[site_id]['back_diff_norm'], nan_policy='omit')
-    #     a1 = np.array(statistics[site_id]['aer_diff']) # extract the aerosol difference dataset from statistics
-    # plot!
+            # line plot radius [m]
+            plot_r_mds(day, FOcon.aerFO_version, savedir, site_id,
+                       mod_data_modN_modr, mod_data_modN_pm10r, mod_data_obsN_pm10r,
+                       mod_data_obsN_modr)
 
-
-    # b1 = np.array(statistics[site_id]['back_diff_norm'])
-    #
-    # a1_idx = np.where(np.isnan(a1))
-    # b1_idx = np.where(np.isnan(b1))
-    #
-    # a1[b1_idx] = np.nan
-    # b1[a1_idx] = np.nan
-    #
-    # an_idx = ~np.isnan(a1)
-    #
-    # pearsonr(a1[an_idx],b1[an_idx])
-
-    # # pass in statistics with site id!
-    # if pm10_stats == True:
-    #     plot_back_point_diff(statistics[site_id],
-    #                                savedir, model_type, ceil_gate_num, ceil, sampleSize, corr, var_type='aerosol',
-    #                                c_type='rh_mod', extra = '_aodChange')
-    #
-    # if rh_stats == True:
-    #     plot_back_point_diff(statistics[site_id],
-    #                                savedir, model_type, ceil_gate_num, ceil, sampleSize, corr, var_type='RH',
-    #                                c_type='rh_mod')
-
-    plt.subplots(1,1,figsize=(6,4))
-    plt.plot_date(statistics_modN[site_id]['datetime'], statistics_modN[site_id]['back_diff_norm'], label='modN', fmt='--')
-    plt.plot_date(statistics_obsN[site_id]['datetime'], statistics_obsN[site_id]['back_diff_norm'], label='obsN', fmt='--')
-    plt.xlabel('time')
-    plt.ylabel('beta')
-    plt.legend()
-    plt.suptitle('modN_0 = 8000 cm-3')
-    plt.tight_layout(pad=2)
-    plt.savefig(savedir + 'modN_and_obsN_8000.png')
-
-    plt.close('all')
+            # line plot NumConc [m-3]
+            plot_Ns(day, FOcon.aerFO_version, savedir, site_id,
+                       mod_data_modN_modr, mod_data_modN_pm10r, mod_data_obsN_pm10r,
+                       mod_data_obsN_modr)
 
     return
 
