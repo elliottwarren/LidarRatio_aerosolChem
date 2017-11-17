@@ -18,6 +18,7 @@ Dv = volume mean diameter
 
 import matplotlib.pyplot as plt
 from matplotlib.dates import DateFormatter
+import pickle
 
 import numpy as np
 import datetime as dt
@@ -234,7 +235,7 @@ def calc_dNdlogD_from_N_aps(aps_N, aps_D, aps_dlogD, aps_header_bins):
 
     return aps_dNdlogD
 
-def merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D):
+def merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D, timeRes=60):
 
     """
     Merge the dmps and aps dNdlogD datasets together, such a a 2D array called 'binned' is in the new dNdlogD array
@@ -242,13 +243,14 @@ def merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D):
     :param dmps_D:
     :param aps_dNdlogD:
     :param aps_D:
+    :param timeRes: time resolution of output data in minutes
     :return:
     """
 
     # time range - APS time res: 5 min, DMPS time res: ~12 min
     start_time = np.min([aps_dNdlogD['time'][0], dmps_dNdlogD['time'][0]])
     end_time = np.max([aps_dNdlogD['time'][-1], dmps_dNdlogD['time'][-1]])
-    time_range = eu.date_range(start_time, end_time, 15, 'minutes')
+    time_range = eu.date_range(start_time, end_time, timeRes, 'minutes')
 
     # binned shape = [time, bin]
     dNdlogD = {'time': time_range,
@@ -264,7 +266,7 @@ def merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D):
 
             # find data for this time
             binary = np.logical_and(dmps_dNdlogD['time'] > time_range[t],
-                                    dmps_dNdlogD['time'] < time_range[t] + dt.timedelta(minutes=15))
+                                    dmps_dNdlogD['time'] < time_range[t] + dt.timedelta(minutes=timeRes))
 
             # bin str
             D_i_str = str(dmps_D[D_idx])
@@ -276,7 +278,7 @@ def merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D):
 
             # find data for this time
             binary = np.logical_and(aps_dNdlogD['time'] > time_range[t],
-                                    aps_dNdlogD['time'] < time_range[t] + dt.timedelta(minutes=15))
+                                    aps_dNdlogD['time'] < time_range[t] + dt.timedelta(minutes=timeRes))
 
             # bin str
             D_i_str = str(aps_D[D_idx])
@@ -310,6 +312,7 @@ def main():
     ceilMetaDatadir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/'
     ceilDatadir = datadir + 'L1/'
     rhdatadir = maindir + 'data/L1/'
+    pickledir = maindir + 'data/pickle/'
 
     # pm10
     site = 'NK'
@@ -329,6 +332,9 @@ def main():
     # 2 - more stable
     # see Kotthaus et al (2016) for more.
     ceil_gate_num = 2
+
+    # time resolution of output data in minutes
+    timeRes = 60
 
     # ==============================================================================
     # Read data
@@ -370,7 +376,6 @@ def main():
     # for i in range(len(widths_end)):
     #     print str(widths_start[i]) + ' to ' + str(widths_end[i]) + ': mid = ' + str(D_mid[i]) + '; width = ' + str(widths[i])
 
-
     # -----------------------------------------------------------------------
 
     # Read in aps data (larger radii: 0.5 to 20 microns)
@@ -393,7 +398,7 @@ def main():
 
     # merge the two dNdlogD datasets together...
     # set up so data resolution is 15 mins
-    dNdlogD = merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D)
+    dNdlogD = merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D, timeRes=timeRes)
 
     # merge the aerosol parameters together too
     D = np.append(dmps_D, aps_D)
@@ -493,27 +498,44 @@ def main():
     # plot time series of r for defined acumm range
     fig = plt.figure()
     # plt.plot((dVdD['Dv'] * 1e-3) / 2, label='rv using dN/dD')
-    plt.plot((dNdlogD['Dv_accum'] * 1e-3) / 2, label='rv using dN/dlogD')
-    plt.ylabel('microns')
+    plt.plot_date(dNdlogD['time'], (dNdlogD['Dv_accum'] * 1e-3) / 2, label='rv using dN/dlogD', linestyle='-', fmt='-')
+    plt.ylabel('rv [microns]')
+    plt.xlabel('Date [dd/mm]')
+    ax = plt.gca()
+    ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
     # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
-    plt.legend()
+    # plt.legend()
     plt.savefig(savedir + 'aerosol_distributions/rv_accum_0p02_0p7.png')
+    plt.close(fig)
     # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
 
     # Get total number of particles (eqn 8.9)
     for t in range(len(dNdD['time'])):
 
         dNdlogD['Ntot_accum'][t] = np.sum(dNdlogD['binned'][t, accum_range_idx] * dlogD[accum_range_idx])
+        dNdlogD['Ntot'][t] = np.sum(dNdlogD['binned'][t, :] * dlogD)
+
+    np.nanmean(dNdlogD['Ntot_accum'])
 
     # plot time series of N for defined acumm range
     fig = plt.figure()
     # plt.plot((dVdD['Dv'] * 1e-3) / 2, label='rv using dN/dD')
-    plt.plot(dNdlogD['Ntot_accum'])
+    plt.plot_date(dNdlogD['time'], dNdlogD['Ntot_accum'], linestyle='-', fmt='-')
     plt.ylabel('Ntot [cm-3]')
+    plt.xlabel('Date [dd/mm]')
+    ax = plt.gca()
+    ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
     # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
     plt.legend()
     plt.savefig(savedir + 'aerosol_distributions/Ntot_accum_0p02_0p7.png')
+    plt.close(fig)
     # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
+
+    # save time, Dv and N as a pickle
+    pickle_save = {'time': dNdlogD['time'], 'Ntot': dNdlogD['Ntot_accum'], 'Dv': dNdlogD['Dv_accum']}
+    with open(pickledir + 'accum_Ntot_Dv_clearfloWinter.pickle', 'wb') as handle:
+        pickle.dump(pickle_save, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
 
     # ==============================================================================
     # RH against r and N
@@ -545,6 +567,27 @@ def main():
     plt.suptitle('RH during clearflo winter iop')
     plt.savefig(savedir + 'aerosol_distributions/RH_lineplot.png')
     plt.close(fig)
+
+    # -----------------------------------------------
+
+    # quickly make a daily RH timeseries
+
+    date_range = eu.date_range(dt.datetime(2012, 1, 10), dt.datetime(2012, 2, 8), 1, 'days')
+    RH_day = {'time': date_range, 'RH': np.empty(len(date_range))}
+    RH_day['RH'][:] = np.nan
+
+    for t, time_i in enumerate(RH_day['time']):
+
+        # find the time for this period in the original 1min data
+        binary = np.logical_and(RH['time'] > time_i,
+                                RH['time'] < time_i + dt.timedelta(days=1))
+
+        # create mean of all data within the time period and store
+        RH_day['RH'][t] = np.nanmean(RH['RH'][binary])
+
+    # find driest day, quickplot data
+    # np.where(RH_day['RH'] == np.nanmin(RH_day['RH']))
+    # plt.plot(RH_day['RH'])
 
     # ------------------------------------------------
 
