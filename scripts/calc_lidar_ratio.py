@@ -184,7 +184,7 @@ def internal_time_completion(data, date_range):
         idx = np.where(data['time'] == time_t)[0]
 
         # if not empty, put in the data to new array
-        if idx != []:
+        if idx.size != 0:
             for h in data.iterkeys():
                 data_full[h][t] = data[h][idx]
 
@@ -203,18 +203,146 @@ def convert_mass_to_kg_kg(mass, WXT, aer_particles):
 
     # convert temperature to Kelvin
     T_K = WXT['Tair'] + 273.15
-    p_Pa = WXT['press'] * 100
+    p_Pa = WXT['press'] * 100.0
 
     # density of air [kg -3] # assumes dry air atm
     # p = rho * R * T [K]
-    dryair_rho = p_Pa / (286.9 * T_K)
+    WXT['dryair_rho'] = p_Pa / (286.9 * T_K)
 
     # convert g m-3 air to kg kg-1 of air
-    mass_kg = {'time': mass['time']}
+    mass_kg_kg = {'time': mass['time']}
     for aer_i in aer_particles:
-        mass_kg[aer_i] = mass[aer_i] * 1e-3 / dryair_rho
+        mass_kg_kg[aer_i] = mass[aer_i] * 1e-3 / WXT['dryair_rho']
 
-    return mass_kg_kg
+    return mass_kg_kg, WXT
+
+# Swelling
+
+def calc_r_md_all_particles(r_d_microns, WXT, aer_i):
+
+    """
+    Calculate the r_md for all particles, given the RH and what species
+
+    :param r_d_microns:
+    :param WXT: (needed for RH)
+    :param aer_i:
+    :return: r_md
+
+    Currently just works for ammonium sulphate, ammonium nitrate and NaCl
+    """
+
+    # calulate r_md based on Fitzgerald (1975) eqn 8 - 10
+    def calc_r_md_i(rh_i):
+
+        """
+        Calculate r_md for a single value of rh (rh_i)
+        :param rh_i:
+        :return: r_md_i
+        """
+
+        beta = np.exp((0.00077 * rh_i) / (1.009 - rh_i))
+        if rh_i < 0.97:
+            phi = 1.058 - ((0.0155 * (rh_i - 0.97))
+                           / (1.02 - (rh_i ** 1.4)))
+        else:
+            phi = 1.058
+        alpha = 1.2 * np.exp((0.066 * rh_i) / (phi - rh_i))
+        r_md_i = alpha * (r_d_microns ** beta)
+
+        return r_md_i
+
+    # aer_i = '(NH4)2SO4'
+
+    # swell ammonium sulphate
+    r_md = {}
+    r_md[aer_i] =  np.empty(len(WXT['time']))
+    r_md[aer_i][:] = np.nan
+
+    phi = np.empty(len(WXT['time']))
+    phi[:] = np.nan
+
+    # limits for what approach to use, depending on the RH
+    # from the CLASSIC guidence, follows Fitzgerald (1975)
+    if aer_i == '(NH4)2SO4':
+        rh_cap = 0.995 # calculate r_md specifically for the upper limit (considered max rh)
+        rh_del = 0.81 # calculate r_md specifically for the upper limit (start of empirical formula)
+                     # CLASSIC does linear interpolation bettween rh_del and rh_eff.
+        rh_eff = 0.3 # efflorescence (below is dry)
+    elif aer_i == 'NH4NO3':
+        rh_cap = 0.995
+        rh_del = 0.61
+        rh_eff = 0.3
+
+    elif aer_i == 'NaCl':
+        rh_cap = 0.995
+        rh_del = 0.75
+        rh_eff = 0.42
+
+    # --------------------------------------------
+    # Calculate r_md for the species, given RH
+    # -----------------------------------------------
+
+    # empirical relationships fitted for radius in micrometers, not meters (according to CLASSIC guidance).
+
+    # --- delequescence - rh cap (defined as 0.995. Above this empirical relationship breaks down) --- #
+
+    # Currently just calculates it for all, then gets overwritten lower down, depending on their RH (e.g. below eff)
+    # ToDo use the rh_bet_del_cap to only calc for those within the del - cap range.
+
+    # # between deliquescence and rh_cap (set at 0.995 for all)
+    # bool = np.logical_and(WXT['RH_frac'] >= rh_del, WXT['RH_frac'] <= rh_cap)
+    # rh_bet_del_cap = np.where(bool == True)[0]
+
+    beta = np.exp((0.00077 * WXT['RH'])/(1.009 - WXT['RH']))
+    rh_lt_97 = WXT['RH_frac'] < 0.97
+    phi[rh_lt_97] = 1.058
+    phi[~rh_lt_97] = 1.058 - ((0.0155 * (WXT['RH_frac'][~rh_lt_97] - 0.97))
+                              /(1.02 - (WXT['RH_frac'][~rh_lt_97] ** 1.4)))
+    alpha = 1.2 * np.exp((0.066 * WXT['RH_frac'])/ (phi - WXT['RH_frac']))
+
+    r_md[aer_i] = alpha * (r_d_microns ** beta)
+
+    # --- above rh_cap ------#
+
+    # set all r_md(RH>99.5%) to r_md(RH=99.5%) to prevent growth rates inconsistent with impirical equation.
+    # replace all r_md values above 0.995 with 0.995
+    rh_gt_cap = WXT['RH_frac'] > rh_cap
+    r_md[aer_i][rh_gt_cap] = calc_r_md(rh_cap)
+
+    # --- 0 to efflorescence --- #
+
+    # below efflorescence point (0.3 for sulhate, r_md = r_d)
+    rh_lt_eff = WXT['RH_frac'] <= rh_eff
+    r_md[aer_i][rh_lt_eff] = r_d_microns
+
+    # ------ efflorescence to deliquescence ----------#
+
+    # calculate r_md for the deliquescence rh - used in linear interpolation
+    r_md_del = calc_r_md(rh_del)
+
+    # all values that need to have some linear interpolation
+    bool = np.logical_and(WXT['RH_frac'] >= rh_eff, WXT['RH_frac'] <= rh_del)
+    rh_bet_eff_del = np.where(bool == True)[0]
+
+    # between efflorescence point and deliquescence point, r_md is expected to value linearly between the two
+    low_rh = rh_eff
+    up_rh = rh_del
+    low_r_md = r_d_microns
+    up_r_md = r_md_del
+
+    diff_rh = up_rh - low_rh
+    diff_r_md = r_md_del - r_d_microns
+    abs_diff_r_md = abs(diff_r_md)
+
+    # find distance rh is along linear interpolation [fraction] from lower limit
+    # frac = np.empty(len(r_md))
+    # frac[:] = np.nan
+    frac = ((WXT['RH_frac'][rh_bet_eff_del] - low_rh) / diff_rh)
+
+    # calculate interpolated values for r_md
+    r_md['(NH4)2SO4'][rh_bet_eff_del] = low_r_md + (frac * abs_diff_r_md)
+
+    return r_md
 
 def main():
 
@@ -254,7 +382,18 @@ def main():
 
     # aerosol particles to calculate (OC = Organic carbon, CBLK = black carbon, both already measured)
     # match dictionary keys further down
-    aer_particles = ['(NH4)2SO4', 'NH4NO3', 'NaCl', 'OC', 'CBLK']
+    aer_particles = ['(NH4)2SO4', 'NH4NO3', 'NaCl', 'CORG', 'CBLK']
+
+    # density of molecules [kg m-3]
+    # CBLK: # Zhang et al., (2016) Measuring the morphology and density of internally mixed black carbon
+    #           with SP2 and VTDMA: New insight into the absorption enhancement of black carbon in the atmosphere
+    # ORG: Range of densities for organic carbon is mass (0.625 - 2 g cm-3)
+    #  Haywood et al 2003 used 1.35 g cm-3 but Schkolink et al., 2006 claim the average is 1.1 g cm-3 after a lit review
+    aer_density = {'(NH4)2SO4': 1770,
+                   'NH4NO3': 1720,
+                   'NaCl': 2160,
+                   'CORG': 1100,
+                   'CBLK': 1200}
 
     # ==============================================================================
     # Read data
@@ -268,31 +407,25 @@ def main():
     # Read WXT data
     wxtfilepath = wxtdatadir + wxt_inst_site + '_' + year + '_15min.nc'
     WXT_in = eu.netCDF_read(wxtfilepath, vars=['RH', 'Tair','press', 'time'])
+    WXT_in['RH_frac'] = WXT_in['RH'] * 0.01
     WXT_in['time'] -= dt.timedelta(minutes=15) # change time from 'obs end' to 'start of obs', same as the other datasets
 
     # Trim times
     # as WXT and mass data are 15 mins and both line up exactly already
     #   therefore trim WXT to match mass time
-    mass, WXT_in = trim_mass_wxt_times(mass_in, WXT_in)
+    mass_in, WXT_in = trim_mass_wxt_times(mass_in, WXT_in)
 
     # Time match so mass and WXT times line up INTERNALLY as well
     date_range = eu.date_range(WXT_in['time'][0], WXT_in['time'][-1], 15, 'minutes')
 
-    # begin time matching
-    print 'beginning time matching for WXT...'
-
     # make sure there are no time stamp gaps in the data so mass and WXT will match up perfectly, timewise.
+    print 'beginning time matching for WXT...'
     WXT = internal_time_completion(WXT_in, date_range)
-
-    # end time matching
     print 'end time matching for WXT...'
 
-    # begin time matching
+    # same but for mass data
     print 'beginning time matching for mass...'
-
     mass = internal_time_completion(mass_in, date_range)
-
-    # end time matching
     print 'end time matching for mass...'
 
     # ==============================================================================
@@ -323,16 +456,63 @@ def main():
     mass['NaCl'] = mass['CL'] * 1.65
 
     # convert masses from g m-3 to kg kg-1_air for swelling.
-    # use observed Tair and pressure from KSSW WXT to calculate air density
-    mass_kg_kg = convert_mass_to_kg_kg(mass, WXT, aer_particles)
+    # Also creates the air density and is stored in WXT
+    mass_kg_kg, WXT = convert_mass_to_kg_kg(mass, WXT, aer_particles)
+
+    # start with just 0.11 microns as the radius - can make it more fancy later...
+    r_d_microns = 0.11
+    r_d_m = 0.11e-06
+
+    # calculate the number of particles for each species using radius_m and the mass
+    # Hopefull not needed!
+    num_part = {}
+    for aer_i in aer_particles:
+        num_part[aer_i] = mass_kg_kg[aer_i] / ((4.0/3.0) * np.pi * (aer_density[aer_i]/WXT['dryair_rho']) * (r_d_m ** 3.0))
+
+    # -------------------------------------------
+
+    # swell the particles (r_md,aer_i)
+
+    # swell ammonium sulphate
+    r_md = {}
+    r_md['(NH4)2SO4'] =  np.empty(len(mass['time']))
+    r_md['(NH4)2SO4'][:] = np.nan
+
+    phi = np.empty(len(mass['time']))
+    phi[:] = np.nan
+
+    # calculate the swollen particle size for these three aerosol types
+    # Follows CLASSIC guidence, based off of Fitzgerald (1975)
+    for aer_i in ['(NH4)2SO4', 'NH4NO3', 'NaCl']:
+        r_md[aer_i] = calc_r_md_all_particles(r_d_microns, WXT, aer_i)
 
 
 
 
 
 
+    # calculate absolute volume from mass of aerosol (V_abs,dry,aer_i)
+
+    # calculate abs volume of wetted particles (V_abs,wet,aer_i)
+    # will use wet density
 
 
+    # calculate n_wet,aer_i for each particle
+
+
+    # calculate relative volume of all wet aerosol (V_rel,wet,aer_i)
+
+
+    # calculate n_mixed using volume mixing and (V_rel,wet,aer_i)
+
+
+    # calculate volume mean radii from r_md,aer_i (weighted by V_rel,wet,aer_i)
+
+
+    # calculate Q_back and Q_ext from the avergae r_md and n_mixed
+
+
+    # calculate lidar ratio
 
 
     # assume radii are 0.11 microns for now...
