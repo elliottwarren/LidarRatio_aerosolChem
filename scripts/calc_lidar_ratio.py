@@ -218,7 +218,7 @@ def convert_mass_to_kg_kg(mass, WXT, aer_particles):
 
 # Swelling
 
-def calc_r_md_all_particles(r_d_microns, WXT, aer_i):
+def calc_r_md_species(r_d_microns, WXT, aer_i):
 
     """
     Calculate the r_md for all particles, given the RH and what species
@@ -232,7 +232,7 @@ def calc_r_md_all_particles(r_d_microns, WXT, aer_i):
     """
 
     # calulate r_md based on Fitzgerald (1975) eqn 8 - 10
-    def calc_r_md_i(rh_i):
+    def calc_r_md_i(rh_i, alpha_factor):
 
         """
         Calculate r_md for a single value of rh (rh_i)
@@ -247,16 +247,16 @@ def calc_r_md_all_particles(r_d_microns, WXT, aer_i):
         else:
             phi = 1.058
         alpha = 1.2 * np.exp((0.066 * rh_i) / (phi - rh_i))
-        r_md_i = alpha * (r_d_microns ** beta)
+
+        # alpha factor comes from the Table 1 in Fitzgerald (1975) to be used with some other aerosol types
+        r_md_i = alpha_factor * alpha * (r_d_microns ** beta)
 
         return r_md_i
 
-    # aer_i = '(NH4)2SO4'
 
-    # swell ammonium sulphate
-    r_md = {}
-    r_md[aer_i] =  np.empty(len(WXT['time']))
-    r_md[aer_i][:] = np.nan
+    # Set up array for aerosol
+    r_md =  np.empty(len(WXT['time']))
+    r_md[:] = np.nan
 
     phi = np.empty(len(WXT['time']))
     phi[:] = np.nan
@@ -268,15 +268,18 @@ def calc_r_md_all_particles(r_d_microns, WXT, aer_i):
         rh_del = 0.81 # calculate r_md specifically for the upper limit (start of empirical formula)
                      # CLASSIC does linear interpolation bettween rh_del and rh_eff.
         rh_eff = 0.3 # efflorescence (below is dry)
+        alpha_factor = 1.0 # a coefficient for alpha, which is specific for different aerosol types
     elif aer_i == 'NH4NO3':
         rh_cap = 0.995
         rh_del = 0.61
         rh_eff = 0.3
+        alpha_factor = 1.06
 
     elif aer_i == 'NaCl':
         rh_cap = 0.995
         rh_del = 0.75
         rh_eff = 0.42
+        alpha_factor = 1.35
 
     # --------------------------------------------
     # Calculate r_md for the species, given RH
@@ -300,25 +303,25 @@ def calc_r_md_all_particles(r_d_microns, WXT, aer_i):
                               /(1.02 - (WXT['RH_frac'][~rh_lt_97] ** 1.4)))
     alpha = 1.2 * np.exp((0.066 * WXT['RH_frac'])/ (phi - WXT['RH_frac']))
 
-    r_md[aer_i] = alpha * (r_d_microns ** beta)
+    r_md = alpha_factor * alpha * (r_d_microns ** beta)
 
     # --- above rh_cap ------#
 
     # set all r_md(RH>99.5%) to r_md(RH=99.5%) to prevent growth rates inconsistent with impirical equation.
     # replace all r_md values above 0.995 with 0.995
     rh_gt_cap = WXT['RH_frac'] > rh_cap
-    r_md[aer_i][rh_gt_cap] = calc_r_md(rh_cap)
+    r_md[rh_gt_cap] = calc_r_md_i(rh_cap, alpha_factor)
 
     # --- 0 to efflorescence --- #
 
     # below efflorescence point (0.3 for sulhate, r_md = r_d)
     rh_lt_eff = WXT['RH_frac'] <= rh_eff
-    r_md[aer_i][rh_lt_eff] = r_d_microns
+    r_md[rh_lt_eff] = r_d_microns
 
     # ------ efflorescence to deliquescence ----------#
 
     # calculate r_md for the deliquescence rh - used in linear interpolation
-    r_md_del = calc_r_md(rh_del)
+    r_md_del = calc_r_md_i(rh_del, alpha_factor)
 
     # all values that need to have some linear interpolation
     bool = np.logical_and(WXT['RH_frac'] >= rh_eff, WXT['RH_frac'] <= rh_del)
@@ -340,7 +343,7 @@ def calc_r_md_all_particles(r_d_microns, WXT, aer_i):
     frac = ((WXT['RH_frac'][rh_bet_eff_del] - low_rh) / diff_rh)
 
     # calculate interpolated values for r_md
-    r_md['(NH4)2SO4'][rh_bet_eff_del] = low_r_md + (frac * abs_diff_r_md)
+    r_md[rh_bet_eff_del] = low_r_md + (frac * abs_diff_r_md)
 
     return r_md
 
@@ -389,11 +392,14 @@ def main():
     #           with SP2 and VTDMA: New insight into the absorption enhancement of black carbon in the atmosphere
     # ORG: Range of densities for organic carbon is mass (0.625 - 2 g cm-3)
     #  Haywood et al 2003 used 1.35 g cm-3 but Schkolink et al., 2006 claim the average is 1.1 g cm-3 after a lit review
-    aer_density = {'(NH4)2SO4': 1770,
-                   'NH4NO3': 1720,
-                   'NaCl': 2160,
-                   'CORG': 1100,
-                   'CBLK': 1200}
+    aer_density = {'(NH4)2SO4': 1770.0,
+                   'NH4NO3': 1720.0,
+                   'NaCl': 2160.0,
+                   'CORG': 1100.0,
+                   'CBLK': 1200.0}
+
+    # pure water density
+    water_density = 1000.0 # kg m-3
 
     # ==============================================================================
     # Read data
@@ -460,8 +466,9 @@ def main():
     mass_kg_kg, WXT = convert_mass_to_kg_kg(mass, WXT, aer_particles)
 
     # start with just 0.11 microns as the radius - can make it more fancy later...
-    r_d_microns = 0.11
-    r_d_m = 0.11e-06
+    r_d_microns = 0.11  # [microns]
+    r_d_m = r_d_microns * 1.0e-6  # [m]
+    V_dry_from_r_d = (4.0/3.0) * np.pi * (r_d_m ** 3.0)  # [m3]
 
     # calculate the number of particles for each species using radius_m and the mass
     # Hopefull not needed!
@@ -469,35 +476,82 @@ def main():
     for aer_i in aer_particles:
         num_part[aer_i] = mass_kg_kg[aer_i] / ((4.0/3.0) * np.pi * (aer_density[aer_i]/WXT['dryair_rho']) * (r_d_m ** 3.0))
 
-    # -------------------------------------------
+    # calculate dry volume
+    V_dry_from_mass = {}
+    for aer_i in aer_particles:
+        # V_dry[aer_i] = (4.0/3.0) * np.pi * (r_d_m ** 3.0)
+        V_dry_from_mass[aer_i] = mass_kg_kg[aer_i] / aer_density[aer_i]  # [m3]
 
-    # swell the particles (r_md,aer_i)
+    # ---------------------------------------------------------
+    # Swell the particles (r_md,aer_i) [microns]
 
-    # swell ammonium sulphate
+    # set up dictionary
     r_md = {}
-    r_md['(NH4)2SO4'] =  np.empty(len(mass['time']))
-    r_md['(NH4)2SO4'][:] = np.nan
-
-    phi = np.empty(len(mass['time']))
-    phi[:] = np.nan
 
     # calculate the swollen particle size for these three aerosol types
     # Follows CLASSIC guidence, based off of Fitzgerald (1975)
     for aer_i in ['(NH4)2SO4', 'NH4NO3', 'NaCl']:
-        r_md[aer_i] = calc_r_md_all_particles(r_d_microns, WXT, aer_i)
+        r_md[aer_i] = calc_r_md_species(r_d_microns, WXT, aer_i)
+
+    # set r_md for black carbon as r_d, assuming black carbon is completely hydrophobic
+    r_md['CBLK'] = np.empty(len(date_range))
+    r_md['CBLK'][:] = r_d_microns
+
+    # calculate r_md for organic carbon using the MO empirically fitted g(RH) curves
+    # r_md['CORG'] = ...
 
 
-
-
-
-
-    # calculate absolute volume from mass of aerosol (V_abs,dry,aer_i)
+    # -----------------------------------------------------------
 
     # calculate abs volume of wetted particles (V_abs,wet,aer_i)
-    # will use wet density
+    # use the growth factors calculated based on r_d to calc V_wet from V_dry(mass, density)
+
+    # calculate the physical growth factor, wetted particle density, wetted particle volume, ...
+    #   and water volume (V_wet - Vdry)
+
+    GF = {}
+    aer_wet_density = {}
+    V_wet_from_mass = {}
+    V_water_i  = {}
+    for aer_i in ['(NH4)2SO4', 'NH4NO3', 'NaCl', 'CBLK']: # aer_particles:
+
+        # physical growth factor
+        GF[aer_i] = r_md[aer_i] / r_d_microns
+
+        # wet aerosol density
+        aer_wet_density[aer_i] = (aer_density[aer_i] / (GF[aer_i]**3.0)) + \
+                                 (water_density * (1.0 - (1.0 / (GF[aer_i]**3.0))))
 
 
-    # calculate n_wet,aer_i for each particle
+        # wet volume, using the growth rate from r_d to r_md
+        V_wet_from_mass[aer_i] = V_dry_from_mass[aer_i] * (GF[aer_i] ** 3.0)
+
+
+        # if np.nan (i.e. there was no mass therefore no volume) make it 0.0
+        bin = np.isnan(V_wet_from_mass[aer_i])
+        V_wet_from_mass[aer_i][bin] = 0.0
+
+        # water volume contribution from just this aer_i
+        V_water_i[aer_i] = V_wet_from_mass[aer_i] - V_dry_from_mass[aer_i]
+
+    # calculate total water volume
+    V_water_2d = np.array(V_water_i.values()) # turn into a 2D array
+    V_water_tot = np.nansum(V_water_2d, axis=0)
+
+    # combine volumes of the DRY aerosol and the water into a single 2d array shape=(time, substance)
+    V_abs = np.transpose(np.vstack([np.array(V_dry_from_mass.values()),V_water_tot]))
+
+    # now calculate the relative volume of each of these
+    # scale absolute volume to find relative volume of each (such that sum(all substances for time t = 1))
+    scaler = 1.0/(np.nansum(V_abs, axis=1)) # a value for each time step
+    scaler_rep = np.transpose(np.array([scaler]*6)) # 2d array shape=(time, substance)
+    V_rel = scaler_rep * V_abs
+
+    # --------------------------------------------------------------
+
+    # calculate n_mixed using volume mixing method
+
+
 
 
     # calculate relative volume of all wet aerosol (V_rel,wet,aer_i)
