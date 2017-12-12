@@ -72,6 +72,11 @@ def read_dmps(filepath):
     :return: dNdlogD
     """
 
+    """
+    ToDo - Remove the overlapping radius bins so the calculation of dD and dlogD are accurate below 28 nm, see dmps 
+    datafile. 
+    """
+
     dNdlogD_raw = np.genfromtxt(filepath, delimiter=' ', skip_header=74, dtype=float, names=True)
     # N_raw = np.genfromtxt(filepath, delimiter=',', skip_header=75, dtype=float, names=True)
 
@@ -175,7 +180,6 @@ def calc_bin_parameters_aps(N, units='nm'):
 
     """
     Calculate bin parameters for the aps data
-    convert from microns to nm
     :param N:
     :return:
     """
@@ -257,6 +261,11 @@ def merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D, timeRes=60)
                'binned': np.empty([len(time_range), len(dmps_D) + len(aps_D)])}
     dNdlogD['binned'][:] = np.nan
 
+    # # keep N values too
+    # N = {'time': time_range,
+    #      'binned': np.empty([len(time_range), len(dmps_D) + len(aps_D)])}
+    # N['binned'][:] = np.nan
+
     # insert the dmps data first, take average of all data within the time period
     for t in range(len(time_range)):
 
@@ -274,6 +283,7 @@ def merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D, timeRes=60)
             # create mean of all data within the time period and store
             dNdlogD['binned'][t, D_idx] = np.nanmean(dmps_dNdlogD[D_i_str][binary])
 
+
         for D_idx in range(len(aps_D)):  # smaller data fill the first columns
 
             # find data for this time
@@ -289,7 +299,110 @@ def merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D, timeRes=60)
             # create mean of all data within the time period and store
             dNdlogD['binned'][t, D_binned_idx] = np.nanmean(aps_dNdlogD[D_i_str][binary])
 
+
+
     return dNdlogD
+
+def hourly_rh_threshold_pickle_save(dN, dVdlogD, dNdlogD, RH, D, dD, pickledir, RHthresh=60.0, equate='lt'):
+
+    """
+    Create hourly version of the aerosol data for saving. Also only take data based on an RH threshold
+    :param dN:
+    :param dVdlogD:
+    :param dNdlogD:
+    :param RH: relative humidity
+    :param D:
+    :param dD:
+    :param pickledir:
+    :param RHthresh:
+    :param equate:
+    :return: N_hourly [dict]
+    """
+
+    # create hourly WXT and dN data
+    # remove dN data where RH was above a certain threshold
+    date_range = eu.date_range(dN['time'][0], dN['time'][-1] + dt.timedelta(hours=1), 1, 'hours')
+    N_hourly = {'dN': dN['binned'], 'time': dN['time'], 'D': D, 'dD': dD}
+    N_hourly['dV/dlogD'] = deepcopy(dVdlogD['binned'])
+    N_hourly['dN/dlogD'] = deepcopy(dNdlogD['binned'])
+    N_hourly['RH'] =  np.empty(len(dN['time']))
+    N_hourly['RH'][:] = np.nan
+    for t, time_t in enumerate(dN['time'][:-1]):
+        bool = np.logical_and(np.array(RH['time']) > time_t, np.array(RH['time']) < time_t + dt.timedelta(hours=1))
+
+        med_RH = np.nanmean(RH['RH'][bool]) # RH
+        med_RR = np.nanmean(RH['RR'][bool]) # rain rate in together with RH
+        N_hourly['RH'][t] = med_RH
+
+        # only keep values that are less than the RH threshold by np.nan values above it
+        # only keep values if there was no rain present during the period
+        if equate == 'lt':
+            if (med_RH > RHthresh) | (med_RR > 0.0):
+                N_hourly['dN'][t, :] = np.nan
+                N_hourly['dV/dlogD'][t, :] = np.nan
+                N_hourly['dN/dlogD'][t, :] = np.nan
+
+        # only keep values that are greater than the threshold by np.nan values below it
+        # only keep values if there was no rain present during the period
+        elif equate == 'gt':
+            if (med_RH < RHthresh) | (med_RR > 0.0):
+                N_hourly['dN'][t, :] = np.nan
+                N_hourly['dV/dlogD'][t, :] = np.nan
+                N_hourly['dN/dlogD'][t, :] = np.nan
+
+
+    # save dN data in pickle form
+    # save time, Dv and N as a pickle
+    # with open(pickledir + 'dN_dmps_aps_clearfloWinter.pickle', 'wb') as handle:
+    #     pickle.dump(dN, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    # NOTE! DO NOT USE protocol=HIGHEST..., loading from python in linux does not work for some uknown reason...
+    with open(pickledir + 'N_hourly_dmps_aps_clearfloWinter_'+equate+str(RHthresh)+'_cut.pickle', 'wb') as handle:
+        pickle.dump(N_hourly, handle)
+
+    return N_hourly
+
+# plotting
+
+def quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savedir):
+
+    # median, IQRs
+    N_hourly['median'] = np.nanmedian(N_hourly['dV/dlogD'], axis=0)
+    N_hourly['25th'] = np.nanpercentile(N_hourly['dV/dlogD'], 25, axis=0)
+    N_hourly['75th'] = np.nanpercentile(N_hourly['dV/dlogD'], 75, axis=0)
+
+    N_hourly_50['median'] = np.nanmedian(N_hourly_50['dV/dlogD'], axis=0)
+    N_hourly_50['25th'] = np.nanpercentile(N_hourly_50['dV/dlogD'], 25, axis=0)
+    N_hourly_50['75th'] = np.nanpercentile(N_hourly_50['dV/dlogD'], 75, axis=0)
+
+    # median, IQRs
+    dVdlogD['median'] = np.nanmedian(dVdlogD['binned'], axis=0)
+    dVdlogD['25th'] = np.nanpercentile(dVdlogD['binned'], 25, axis=0)
+    dVdlogD['75th'] = np.nanpercentile(dVdlogD['binned'], 75, axis=0)
+
+    # plot volume distribution for data (median with IQR)
+    # ok to use D from N_hourly as the bins are the same as the normal D variable
+    fig = plt.figure(figsize=(5, 2.5))
+    plt.semilogx(N_hourly['D']*1e-3, N_hourly['median'], label='RH<60%', color='green')
+    plt.semilogx(N_hourly['D']*1e-3, N_hourly_50['median'], label='RH<50%', color='red')
+    plt.semilogx(N_hourly['D']*1e-3, dVdlogD['median'], label='allRH', color='blue')
+    plt.vlines(0.5, 0, 3e10, linestyle='--', alpha=0.5)
+    plt.fill_between(N_hourly['D']*1e-3, N_hourly['25th'], N_hourly['75th'], alpha=0.2, facecolor='green', label='RH<60% IQR')
+    plt.fill_between(N_hourly['D']*1e-3, N_hourly_50['25th'], N_hourly_50['75th'], alpha=0.2, facecolor='red', label='RH<50% IQR')
+    plt.fill_between(N_hourly['D'] * 1e-3, dVdlogD['25th'], dVdlogD['75th'], alpha=0.2, facecolor='blue', label='allRH%IQR')
+    plt.ylabel('dV/dlogD [nm3 cm-3]')
+    plt.xlabel('D [microns]')
+    # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(savedir + 'aerosol_distributions/dVdlogD_v_D_clearflo_winter_combined_below60_and50_withRaincut.png')
+    plt.close(fig)
+    # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
+
+
+
+
+    return
 
 def main():
 
@@ -351,11 +464,13 @@ def main():
 
     # read in RH data
     # get all RH filenames and store them in a list
+    # add rain rate [RR] to those extracted
     rhdays = eu.date_range(dt.datetime(2012, 01, 9), dt.datetime(2012, 02, 8), 1, 'days')
     RHfilepaths = [rhdatadir + rh_inst_site+'_'+day.strftime('%Y%j')+'_1min.nc' for day in rhdays]
-    RH = eu.netCDF_read(RHfilepaths, vars=['RH', 'time'])
+    RH = eu.netCDF_read(RHfilepaths, vars=['RH', 'RR', 'time'])
     RH['time'] -= dt.timedelta(minutes=1) # change time from 'obs end' to 'start of obs', same as the other datasets
     RH['RH'][RH['RH'] == -999] = np.nan # remove bad data with nans
+    RH['RR'][RH['RR'] == -999] = np.nan  # remove bad data with nans
 
 
     # read in number distribution from observed data ---------------------------
@@ -368,8 +483,20 @@ def main():
     # read in the ClearfLo data
     dmps_dNdlogD, dmps_header_bins = read_dmps(filepath)
 
-    # calculate bin centres (D_mid)
+    # remove the overlapping bins in both data and the headers!
+    # VERY specific for the DMPS
+    if filepath == 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/ClearfLo/' \
+               'man-dmps_n-kensington_20120114_r0.na':
+        for overlap_bin_i in ['22.7801', '25.2956', '28.0728']:
 
+            del dmps_dNdlogD[overlap_bin_i]
+
+            idx = np.where(dmps_header_bins == overlap_bin_i)
+            dmps_header_bins = np.delete(dmps_header_bins, idx)
+    else:
+        raise ValueError('Script is designed for DMPS data read in - edit script before continuing!')
+
+    # calculate bin centres and ranges for the dmps (D_mid)
     dmps_D, dmps_dD, dmps_logD, dmps_dlogD = calc_bin_parameters_dmps(dmps_dNdlogD)
 
     # # check mid, widths start and ends are ok
@@ -389,7 +516,6 @@ def main():
     # calculate bin parameters
     # for the DMPS, the headers correspond to the min bin edge. Therefore, the header along is the bin max.
     aps_D, aps_dD, aps_logD, aps_dlogD = calc_bin_parameters_aps(aps_N, units='nm')
-
 
     # calc dNdlogD from N, for aps data (coarse)
     aps_dNdlogD = calc_dNdlogD_from_N_aps(aps_N, aps_D, aps_dlogD, aps_header_bins)
@@ -423,6 +549,10 @@ def main():
     dNdD['binned'][:] = np.nan
     dNdD['sum'][:] = np.nan
 
+    # just the number of particles in each bin. Store all the diameter variables too, so it can be saved later
+    dN = {'time': dNdlogD['time'], 'binned': np.empty(dNdlogD['binned'].shape), 'D': D, 'dD': dD}
+    dN['binned'][:] = np.nan
+
     # Volume mean diameter
     dNdlogD['Dv'] = np.empty(len(dNdlogD['time']))
     dNdlogD['Dv'][:] = np.nan # 2nd part of eqn for Dv
@@ -451,12 +581,26 @@ def main():
         # dNdD[key] = dNdlogD[key] / (2.303 * D_i)  # calc nN(D) from nN(dlogD)
         dNdD['binned'][:, i] = dNdlogD['binned'][:, i] / (2.303 * D_i)  # calc nN(D) from nN(dlogD)
 
+
+
         # -----------------------------------------------------------------------
         # calc dV/dD from dN/dD (eqn 8.6)
         dVdD['binned'][:, i] = (np.pi / 6.0) * (D_i ** 3.0) * dNdD['binned'][:, i]
 
         # calc dV/dlogD from dN/dlogD (eqn 8.6)
         dVdlogD['binned'][:, i] = (np.pi / 6.0) * (D_i ** 3.0) * dNdlogD['binned'][:, i]
+
+    # calc dN from dN/dD(Actual number of particles per bin)
+    for i, dD_i in enumerate(dD):
+
+        dN['binned'][:, i] = dNdD['binned'][:, i] * dD_i
+
+    # extract out only aerosol data based on the RH threshold and if it is less or more than it.
+    N_hourly = hourly_rh_threshold_pickle_save(dN, dVdlogD, dNdlogD, RH, D, dD, pickledir, RHthresh=60.0, equate='lt')
+    N_hourly_50 = hourly_rh_threshold_pickle_save(dN, dVdlogD, dNdlogD, RH, D, dD, pickledir, RHthresh=50.0, equate='lt')
+
+    # quickplot what it looks like
+
 
     # # calc dN/dD (n_N(Dp)) from dN/dlogD: Seinfeld and Pandis 2007 eqn 8.18
     # first extract and store the value for the current t, from each bin
@@ -480,8 +624,8 @@ def main():
 
     # NOTE! D is in nm
     # try 0.02 to 0.7 microns first
-    accum_minD, accum_minD_idx, _ = eu.nearest(D, 20.0)
-    accum_maxD, accum_maxD_idx, _ = eu.nearest(D, 700.0)
+    accum_minD, accum_minD_idx, _ = eu.nearest(D, 40.0)
+    accum_maxD, accum_maxD_idx, _ = eu.nearest(D, 2000.0)
     accum_range_idx = range(accum_minD_idx, accum_maxD_idx + 1)
 
     # Get volume mean diameter
@@ -495,19 +639,19 @@ def main():
         # once all bins for time t have been calculated, sum them up
         dNdlogD['Dv_accum'][t] = np.sum(x4)/np.sum(y3)
 
-    # plot time series of r for defined acumm range
-    fig = plt.figure()
-    # plt.plot((dVdD['Dv'] * 1e-3) / 2, label='rv using dN/dD')
-    plt.plot_date(dNdlogD['time'], (dNdlogD['Dv_accum'] * 1e-3) / 2, label='rv using dN/dlogD', linestyle='-', fmt='-')
-    plt.ylabel('rv [microns]')
-    plt.xlabel('Date [dd/mm]')
-    ax = plt.gca()
-    ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
-    # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
-    # plt.legend()
-    plt.savefig(savedir + 'aerosol_distributions/rv_accum_0p02_0p7.png')
-    plt.close(fig)
-    # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
+    # # plot time series of r for defined acumm range
+    # fig = plt.figure()
+    # # plt.plot((dVdD['Dv'] * 1e-3) / 2, label='rv using dN/dD')
+    # plt.plot_date(dNdlogD['time'], (dNdlogD['Dv_accum'] * 1e-3) / 2, label='rv using dN/dlogD', linestyle='-', fmt='-')
+    # plt.ylabel('rv [microns]')
+    # plt.xlabel('Date [dd/mm]')
+    # ax = plt.gca()
+    # ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
+    # # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
+    # # plt.legend()
+    # plt.savefig(savedir + 'aerosol_distributions/rv_accum_0p02_0p7.png')
+    # plt.close(fig)
+    # # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
 
     # Get total number of particles (eqn 8.9)
     for t in range(len(dNdD['time'])):
@@ -535,7 +679,6 @@ def main():
     pickle_save = {'time': dNdlogD['time'], 'Ntot': dNdlogD['Ntot_accum'], 'Dv': dNdlogD['Dv_accum']}
     with open(pickledir + 'accum_Ntot_Dv_clearfloWinter.pickle', 'wb') as handle:
         pickle.dump(pickle_save, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
 
     # ==============================================================================
     # RH against r and N
@@ -634,11 +777,11 @@ def main():
 
     # median, IQRs
     dVdlogD['median'] = np.nanmedian(dVdlogD['binned'], axis=0)
-    dVdlogD['25th'] = np.nanpercentile(dVdlogD['binned'], 75, axis=0)
-    dVdlogD['75th'] = np.nanpercentile(dVdlogD['binned'], 25, axis=0)
+    dVdlogD['25th'] = np.nanpercentile(dVdlogD['binned'], 25, axis=0)
+    dVdlogD['75th'] = np.nanpercentile(dVdlogD['binned'], 75, axis=0)
 
     # plot volume distribution for data (median with IQR)
-    fig = plt.figure()
+    fig = plt.figure(figsize=(5, 2.5))
     plt.semilogx(D*1e-3, dVdlogD['median'], label='median', color='blue')
     plt.vlines(0.5, 0, 3e10, linestyle='--', alpha=0.5)
     plt.fill_between(D*1e-3, dVdlogD['25th'], dVdlogD['75th'], alpha=0.5, facecolor='blue', label='IQR')
@@ -646,18 +789,20 @@ def main():
     plt.xlabel('D [microns]')
     # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
     plt.legend()
+    plt.tight_layout()
     plt.savefig(savedir + 'aerosol_distributions/dVdlogD_v_D_clearflo_winter_combined2.png')
+    plt.close(fig)
     # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
 
     # ------------------------------------------------
 
     # median, IQRs
     dNdlogD['median'] = np.nanmedian(dNdlogD['binned'], axis=0)
-    dNdlogD['25th'] = np.nanpercentile(dNdlogD['binned'], 75, axis=0)
-    dNdlogD['75th'] = np.nanpercentile(dNdlogD['binned'], 25, axis=0)
+    dNdlogD['25th'] = np.nanpercentile(dNdlogD['binned'], 25, axis=0)
+    dNdlogD['75th'] = np.nanpercentile(dNdlogD['binned'], 75, axis=0)
 
     # plot volume distribution for data (median with IQR)
-    fig = plt.figure()
+    fig = plt.figure(figsize=(5, 2.5))
     plt.semilogx(D, dNdlogD['median'], label='median', color='blue')
     plt.vlines(500, 0, np.nanmax(dNdlogD['25th']), linestyle='--', alpha=0.5)
     plt.fill_between(D, dNdlogD['25th'], dNdlogD['75th'], alpha=0.5, facecolor='blue', label='IQR')
@@ -665,7 +810,9 @@ def main():
     plt.xlabel('D [nm]')
     # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
     plt.legend()
+    plt.tight_layout()
     plt.savefig(savedir + 'aerosol_distributions/dNdlogD_v_D_clearflo_winter_combo.png')
+    plt.close(fig)
     # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
 
     # ------------------------------------------------
