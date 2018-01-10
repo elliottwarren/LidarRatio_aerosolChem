@@ -383,15 +383,55 @@ def quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savedir):
     # plot volume distribution for data (median with IQR)
     # ok to use D from N_hourly as the bins are the same as the normal D variable
     fig = plt.figure(figsize=(5, 2.5))
-    plt.semilogx(N_hourly['D']*1e-3, N_hourly['median'], label='RH<60%', color='green')
-    plt.semilogx(N_hourly['D']*1e-3, N_hourly_50['median'], label='RH<50%', color='red')
-    plt.semilogx(N_hourly['D']*1e-3, dVdlogD['median'], label='allRH', color='blue')
-    plt.vlines(0.5, 0, 3e10, linestyle='--', alpha=0.5)
-    plt.fill_between(N_hourly['D']*1e-3, N_hourly['25th'], N_hourly['75th'], alpha=0.2, facecolor='green', label='RH<60% IQR')
-    plt.fill_between(N_hourly['D']*1e-3, N_hourly_50['25th'], N_hourly_50['75th'], alpha=0.2, facecolor='red', label='RH<50% IQR')
-    plt.fill_between(N_hourly['D'] * 1e-3, dVdlogD['25th'], dVdlogD['75th'], alpha=0.2, facecolor='blue', label='allRH%IQR')
-    plt.ylabel('dV/dlogD [nm3 cm-3]')
-    plt.xlabel('D [microns]')
+    plt.semilogx(N_hourly['D']*1e-3, N_hourly['median']*1e-10, label=r'$RH < 60\%$', color='red')
+    # plt.semilogx(N_hourly['D']*1e-3, N_hourly_50['median'], label=r'$RH < 50\%$', color='green')
+    plt.semilogx(N_hourly['D']*1e-3, dVdlogD['median']*1e-10, label=r'$all \/\/data$', color='blue')
+    plt.vlines(0.5, 0, 3, linestyle='--', alpha=0.5)
+    plt.fill_between(N_hourly['D']*1e-3, N_hourly['25th']*1e-10, N_hourly['75th']*1e-10, alpha=0.2, facecolor='red', label=r'$RH < 60\% \/\/IQR$')
+    # plt.fill_between(N_hourly['D']*1e-3, N_hourly_50['25th'], N_hourly_50['75th'], alpha=0.2, facecolor='green', label=r'$RH < 60\% IQR$')
+    plt.fill_between(N_hourly['D'] * 1e-3, dVdlogD['25th']*1e-10, dVdlogD['75th']*1e-10, alpha=0.2, facecolor='blue', label=r'$all \/\/data \/\/IQR$')
+    plt.ylabel('dV/dlogD '+r'$[1^{10}\/nm^{3}\/ cm^{-3}]$', labelpad=0)
+    plt.xlabel(r'$Diameter \/\/[\mu m]$', labelpad=-3)
+    # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(savedir + 'aerosol_distributions/dVdlogD_v_D_clearflo_winter_combined_below60_and50_withRaincut.png')
+    plt.close(fig)
+    # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
+
+
+
+
+    return
+
+def quick_plot_dN(N_hourly, N_hourly_50, dVdlogD, savedir):
+
+    # median, IQRs
+    N_hourly['median'] = np.nanmedian(N_hourly['dV/dlogD'], axis=0)
+    N_hourly['25th'] = np.nanpercentile(N_hourly['dV/dlogD'], 25, axis=0)
+    N_hourly['75th'] = np.nanpercentile(N_hourly['dV/dlogD'], 75, axis=0)
+
+    N_hourly_50['median'] = np.nanmedian(N_hourly_50['dV/dlogD'], axis=0)
+    N_hourly_50['25th'] = np.nanpercentile(N_hourly_50['dV/dlogD'], 25, axis=0)
+    N_hourly_50['75th'] = np.nanpercentile(N_hourly_50['dV/dlogD'], 75, axis=0)
+
+    # median, IQRs
+    dVdlogD['median'] = np.nanmedian(dVdlogD['binned'], axis=0)
+    dVdlogD['25th'] = np.nanpercentile(dVdlogD['binned'], 25, axis=0)
+    dVdlogD['75th'] = np.nanpercentile(dVdlogD['binned'], 75, axis=0)
+
+    # plot volume distribution for data (median with IQR)
+    # ok to use D from N_hourly as the bins are the same as the normal D variable
+    fig = plt.figure(figsize=(5, 2.5))
+    plt.semilogx(N_hourly['D']*1e-3, N_hourly['median']*1e-10, label=r'$RH < 60\%$', color='red')
+    # plt.semilogx(N_hourly['D']*1e-3, N_hourly_50['median'], label=r'$RH < 50\%$', color='green')
+    plt.semilogx(N_hourly['D']*1e-3, dVdlogD['median']*1e-10, label=r'$all \/\/data$', color='blue')
+    plt.vlines(0.5, 0, 3, linestyle='--', alpha=0.5)
+    plt.fill_between(N_hourly['D']*1e-3, N_hourly['25th']*1e-10, N_hourly['75th']*1e-10, alpha=0.2, facecolor='red', label=r'$RH < 60\% \/\/IQR$')
+    # plt.fill_between(N_hourly['D']*1e-3, N_hourly_50['25th'], N_hourly_50['75th'], alpha=0.2, facecolor='green', label=r'$RH < 60\% IQR$')
+    plt.fill_between(N_hourly['D'] * 1e-3, dVdlogD['25th']*1e-10, dVdlogD['75th']*1e-10, alpha=0.2, facecolor='blue', label=r'$all \/\/data \/\/IQR$')
+    plt.ylabel('dV/dlogD '+r'$[1^{10}\/nm^{3}\/ cm^{-3}]$', labelpad=0)
+    plt.xlabel(r'$Diameter \/\/[\mu m]$', labelpad=-3)
     # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
     plt.legend()
     plt.tight_layout()
@@ -600,7 +640,7 @@ def main():
     N_hourly_50 = hourly_rh_threshold_pickle_save(dN, dVdlogD, dNdlogD, RH, D, dD, pickledir, RHthresh=50.0, equate='lt')
 
     # quickplot what it looks like
-
+    quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savedir)
 
     # # calc dN/dD (n_N(Dp)) from dN/dlogD: Seinfeld and Pandis 2007 eqn 8.18
     # first extract and store the value for the current t, from each bin
@@ -624,8 +664,10 @@ def main():
 
     # NOTE! D is in nm
     # try 0.02 to 0.7 microns first
-    accum_minD, accum_minD_idx, _ = eu.nearest(D, 40.0)
-    accum_maxD, accum_maxD_idx, _ = eu.nearest(D, 2000.0)
+    # accum_minD, accum_minD_idx, _ = eu.nearest(D, 40.0)
+    # accum_maxD, accum_maxD_idx, _ = eu.nearest(D, 2000.0)
+    accum_minD, accum_minD_idx, _ = eu.nearest(D, 1000.0)
+    accum_maxD, accum_maxD_idx, _ = eu.nearest(D, 10000.0)
     accum_range_idx = range(accum_minD_idx, accum_maxD_idx + 1)
 
     # Get volume mean diameter
