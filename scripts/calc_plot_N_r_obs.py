@@ -19,11 +19,13 @@ Dv = volume mean diameter
 import matplotlib.pyplot as plt
 from matplotlib.dates import DateFormatter
 import pickle
+import netCDF4 as nc
 
 import numpy as np
 import datetime as dt
 from scipy.stats import spearmanr
 from scipy.stats import pearsonr
+import pandas
 
 from copy import deepcopy
 import colorsys
@@ -214,6 +216,92 @@ def calc_bin_parameters_aps(N, units='nm'):
 
     return D, dD, logD, dlogD
 
+def calc_bin_parameters_smps(N, units='nm'):
+
+    """
+    Calculate bin parameters for the smps data
+    headers are floats within a list, unlike aps which were keys within a dictionary
+    ToDo make aps headers start as floats within a list
+    :param N:
+    :return:
+    """
+
+    # header is the mid bin D
+    D = N['headers']
+
+    # bin max -> the bin + half way to the next bin
+    D_diffs = D[1:] - D[:-1] # checked
+    D_max = D[:-1] + (D_diffs / 2.0) # checked
+
+    # upper edge difference for the last bin is assumed be equal to the upper edge difference of the second to last bin
+    #   therefore add the upper edge difference of the second to last bin, to the last bin.
+    D_max = np.append(D_max, D[-1] + (D_diffs[-1]/2.0)) # checked
+    # lower edge difference for the first bin is assumed to be equal to the lower edge difference of the second bin,
+    #   therefore subtract the lower edge difference of the second bin, from the first bin.
+    # lower edge of subsequent bins = upper edge of the previous bin, hence using D_max[:-1]
+    D_min = np.append(D[0] - (D_diffs[0]/2.0), D_max[:-1]) # checked
+
+    # bin parameters
+    logD = np.log10(D)
+
+    # bin widths
+    dD = D_max - D_min
+    dlogD = np.log10(D_max) - np.log10(D_min)
+
+    # # convert from microns to nm
+    # didn't work for the dlogD one...
+    # if units == 'nm':
+    #
+    #     D *= 1e3
+    #     dD *= 1e3
+    #     logD *= 1e3
+    #     dlogD *= 1e3
+
+    N['D'] = D
+    N['dD'] = dD
+    N['logD'] = logD
+    N['dlogD'] = dlogD
+
+    return N
+
+def calc_bin_parameters_grimm(N, units='nm'):
+
+    """
+    Calculate bin parameters for the GRIMM data
+    grimm dictionary is set up a lot like the smps
+    :param N:
+    :return:
+    """
+
+    # header is the mid bin D
+    D = N['D']
+
+    # bin max -> the bin + half way to the next bin
+    D_diffs = D[1:] - D[:-1] # checked
+    D_max = D[:-1] + (D_diffs / 2.0) # checked
+
+    # upper edge difference for the last bin is assumed be equal to the upper edge difference of the second to last bin
+    #   therefore add the upper edge difference of the second to last bin, to the last bin.
+    D_max = np.append(D_max, D[-1] + (D_diffs[-1]/2.0)) # checked
+    # lower edge difference for the first bin is assumed to be equal to the lower edge difference of the second bin,
+    #   therefore subtract the lower edge difference of the second bin, from the first bin.
+    # lower edge of subsequent bins = upper edge of the previous bin, hence using D_max[:-1]
+    D_min = np.append(D[0] - (D_diffs[0]/2.0), D_max[:-1]) # checked
+
+    # bin parameters
+    logD = np.log10(D)
+
+    # bin widths
+    dD = D_max - D_min
+    dlogD = np.log10(D_max) - np.log10(D_min)
+
+    N['D'] = D
+    N['dD'] = dD
+    N['logD'] = logD
+    N['dlogD'] = dlogD
+
+    return N
+
 # processing / conversions
 
 def calc_dNdlogD_from_N_aps(aps_N, aps_D, aps_dlogD, aps_header_bins):
@@ -238,6 +326,63 @@ def calc_dNdlogD_from_N_aps(aps_N, aps_D, aps_dlogD, aps_header_bins):
         aps_dNdlogD[str(D_i)] = aps_N[bin_i] / dlogD_i
 
     return aps_dNdlogD
+
+def calc_dNdlogD_from_N_smps(smps_N):
+
+    """
+    Calculate dNdlogD from the basic N data, for the smps instrument
+    :param smps_N:
+    :return: dNdlogD
+    """
+
+    smps_dNdlogD = {'time': smps_N['Date'],
+                    'D': smps_N['D'],
+                    'dD': smps_N['dD'],
+                    'dlogD': smps_N['dlogD'],
+                    'logD': smps_N['logD'],
+                    'binned': np.empty(smps_N['binned'].shape)}
+    smps_dNdlogD['binned'][:] = np.nan
+
+    for D_idx, dlogD_i in enumerate(smps_N['dlogD']):
+        smps_dNdlogD['binned'][:, D_idx] = smps_N['binned'][:, D_idx] / dlogD_i
+
+
+    # for idx in range(len(smps_D)):
+    #     # get bin name (start of bin for smps data annoyingly...), dlogD and D for each data column
+    #     # convert bin ranges from microns to nm
+    #     bin_i = smps_header_bins[idx]
+    #     dlogD_i = smps_dlogD[idx]
+    #     D_i = smps_D[idx]
+    #
+    #     smps_dNdlogD[str(D_i)] = smps_N[bin_i] / dlogD_i
+
+    return smps_dNdlogD
+
+def calc_dNdlogD_from_N_grimm(grimm_N):
+
+    """
+    Calculate dNdlogD from the basic N data, for the grimm instrument
+    :param grimm_N:
+    :param grimm_D:
+    :param grimm_dlogD:
+    :param grimm_header_bins:
+    :return: dNdlogD
+    """
+
+    # set up dNdlogD dicionary
+    grimm_dNdlogD = {'time': grimm_N['time'],
+                     'D': grimm_N['D'],
+                     'dD': grimm_N['dD'],
+                     'dlogD': grimm_N['dlogD'],
+                     'logD': grimm_N['logD'],
+                    'binned': np.empty(grimm_N['binned'].shape)}
+    grimm_dNdlogD['binned'][:] = np.nan
+
+    # convert
+    for D_idx, dlogD_i in enumerate(grimm_N['dlogD']):
+        grimm_dNdlogD['binned'][:, D_idx] = grimm_N['binned'][:, D_idx] / dlogD_i
+
+    return grimm_dNdlogD
 
 def merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D, timeRes=60):
 
@@ -302,6 +447,76 @@ def merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D, timeRes=60)
 
 
     return dNdlogD
+
+def merge_smps_grimm_dNdlogD(smps_dNdlogD, grimm_dNdlogD, timeRes=60):
+
+    """
+    Merge the dmps and aps dNdlogD datasets together, such a a 2D array called 'binned' is in the new dNdlogD array
+    :param smps_dNdlogD:
+    :param grimm_dNdlogD:
+    :param timeRes: time resolution of output data in minutes
+    :return:
+    """
+
+    # time range - APS time res: 5 min, DMPS time res: ~12 min
+    start_time = np.min([smps_dNdlogD['time'][0], grimm_dNdlogD['time'][0]])
+    end_time = np.max([smps_dNdlogD['time'][-1], grimm_dNdlogD['time'][-1]])
+    time_range = eu.date_range(start_time, end_time, timeRes, 'minutes')
+
+    # trim the grimm data that overlaps with the dmps (as smps has higher D binning resolution)
+    # find which bins DO NOT overlap, and keep those.
+    grimm_idx = np.where(grimm_dNdlogD['D'] >= smps_dNdlogD['D'][-1])
+
+    # trim
+    grimm_dNdlogD['D'] = grimm_dNdlogD['D'][grimm_idx]
+    grimm_dNdlogD['dD'] = grimm_dNdlogD['dD'][grimm_idx]
+    grimm_dNdlogD['dlogD'] = grimm_dNdlogD['dlogD'][grimm_idx]
+    grimm_dNdlogD['logD'] = grimm_dNdlogD['logD'][grimm_idx]
+    grimm_dNdlogD['binned'] = grimm_dNdlogD['binned'][:, grimm_idx]
+
+
+    # binned shape = [time, bin]
+    dNdlogD = {'time': time_range,
+               'binned': np.empty([len(time_range), len(smps_dNdlogD['D']) + len(grimm_dNdlogD['D'])])}
+    dNdlogD['binned'][:] = np.nan
+
+
+    # insert the smps data first, take average of all data within the time period
+    for t in range(len(time_range)):
+
+        for D_idx in range(len(smps_D)):  # smaller data fill the first columns
+
+            # enumerate might be useful here...
+
+            # find data for this time
+            binary = np.logical_and(smps_dNdlogD['time'] > time_range[t],
+                                    smps_dNdlogD['time'] < time_range[t] + dt.timedelta(minutes=timeRes))
+
+            # bin str
+            D_i_str = str(smps_D[D_idx])
+
+            # create mean of all data within the time period and store
+            dNdlogD['binned'][t, D_idx] = np.nanmean(smps_dNdlogD[D_i_str][binary])
+
+
+        for D_idx in range(len(grimm_D)):  # smaller data fill the first columns
+
+            # find data for this time
+            binary = np.logical_and(grimm_dNdlogD['time'] > time_range[t],
+                                    grimm_dNdlogD['time'] < time_range[t] + dt.timedelta(minutes=timeRes))
+
+            # bin str
+            D_i_str = str(grimm_D[D_idx])
+
+            # idx in new dNlogD array (data will go after the smps data)
+            D_binned_idx = D_idx + len(smps_D)
+
+            # create mean of all data within the time period and store
+            dNdlogD['binned'][t, D_binned_idx] = np.nanmean(grimm_dNdlogD[D_i_str][binary])
+
+
+
+    return dNdlogD, grimm_dNdlogD
 
 def hourly_rh_threshold_pickle_save(dN, dVdlogD, dNdlogD, RH, D, dD, pickledir, RHthresh=60.0, equate='lt'):
 
@@ -462,29 +677,16 @@ def main():
     savedir = maindir + 'figures/number_concentration/'
 
     # data
-    ceilMetaDatadir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/'
-    ceilDatadir = datadir + 'L1/'
     rhdatadir = maindir + 'data/L1/'
     pickledir = maindir + 'data/pickle/'
 
-    # pm10
-    site = 'NK'
-    ceil_id = 'CL31-D'
-    # ceil = ceil_id + '_BSC_' + site
-    ceil = ceil_id + '_' + site
+    # site and instruments
+    # site_ins = {'site_short':'NK', 'site_long': 'North_Kensington', 'DMPS': True, 'APS': True, 'SMPS': False}
+    site_ins = {'site_short':'Ch', 'site_long': 'Chilbolton', 'DMPS': False, 'APS': False, 'SMPS': True}
 
     # RH data
     site_rh = {'WXT_KSK': np.nan}
     rh_inst_site = site_rh.keys()[0]
-
-    site_bsc = {ceil: FOcon.site_bsc[ceil]}
-    # site_bsc = {ceil: FOcon.site_bsc[ceil], 'CL31-E_BSC_NK': 27.0 - 23.2}
-
-    # ceilometer gate number to use for backscatter comparison
-    # 1 - noisy
-    # 2 - more stable
-    # see Kotthaus et al (2016) for more.
-    ceil_gate_num = 2
 
     # time resolution of output data in minutes
     timeRes = 60
@@ -492,15 +694,6 @@ def main():
     # ==============================================================================
     # Read data
     # ==============================================================================
-
-    # Read Ceilometer metadata
-
-    # ceilometer list to use
-    ceilsitefile = 'CeilsCSVfull.csv'
-    ceil_metadata = FO.read_ceil_metadata(ceilMetaDatadir, ceilsitefile)
-
-    ceil_data_i = {site: ceil_metadata[site]}
-
 
     # read in RH data
     # get all RH filenames and store them in a list
@@ -562,7 +755,76 @@ def main():
 
     # -----------------------------------------------------------------------
 
-    # merge the two dNdlogD datasets together...
+    # Read in SMPS data (assuming all SMPS files share the same sort of format)
+    filepath_SMPS = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/NPL/' \
+                   'SMPS_Size_'+site_ins['site_long']+'_Annual_Ratified_2016_v01.xls'
+
+    data_frame = pandas.read_excel(filepath_SMPS, 'Data')
+
+    # remove the first column (date) and last 2 cols (empty col and total)
+    N_raw = np.asarray(data_frame)
+    smps_N = {'Date': np.array([i.to_datetime() for i in N_raw[:, 0]]),
+              'binned': np.array(N_raw[:, 1:-2]),
+              'headers': np.array(list(data_frame)[1:-2])}
+
+    # get bin parameters
+    smps_N = calc_bin_parameters_smps(smps_N, units='nm')
+
+    # calc dNdlogD from N, for aps data
+    smps_dNdlogD = calc_dNdlogD_from_N_smps(smps_N)
+
+    # -----------------------------------------------------------------------
+
+    # Read in the GRIMM EDM data
+    # 2016 data only available from months 01 - 09 inclusively
+    dirs = [maindir + 'data/Chilbolton/2016/' + '%02d'  % i + '/*.nc' for i in range(1, 10)]
+
+    #grimmdays = eu.date_range(dt.datetime(2016, 1, 1), dt.datetime(2016, 9, 24), 1, 'days')
+    grimmdays = eu.date_range(dt.datetime(2016, 1, 1), dt.datetime(2016, 9, 24), 1, 'days')
+    grimmpaths = [maindir + 'data/Chilbolton/2016/'+day.strftime('%m')+'/' +
+                   'cfarr-grimm_chilbolton_'+day.strftime('%Y%m%d')+'.nc' for day in grimmdays]
+
+    # get sizes of arrys, so the multiple file read in data can be reshaped properly
+    test = eu.netCDF_read(grimmpaths[0], vars=['particle_diameter', 'number_concentration_of_ambient_aerosol_in_air', 'time'])
+    num_D_bins = len(test['particle_diameter'])
+
+    # Read in all data from across multiple files
+    # WARNING! GRIMM data is in m-3 not cm-3 like the other instruments! Therefore it is converted to cm-3 here
+    # Reshape data that has been concatonated into vectors, into the proper 2D arrays
+    raw = eu.netCDF_read(grimmpaths, vars=['number_concentration_of_ambient_aerosol_in_air', 'time'])
+
+    grimm_N = {}
+    grimm_N['binned'] = \
+        raw['number_concentration_of_ambient_aerosol_in_air'].reshape(
+                 (len(raw['number_concentration_of_ambient_aerosol_in_air'])/num_D_bins,
+                  num_D_bins))
+    grimm_N['binned'] *= 1e-06 # convert from m-3 to cm-3
+    # multiple read in would just keep concatonating the diameters over and over
+    # convert from microns to nm
+    grimm_N['D'] = test['particle_diameter'] *1e03
+    grimm_N['time'] = raw['time']
+
+    # get bin parameters
+    grimm_N = calc_bin_parameters_grimm(grimm_N, units='nm')
+
+    # calc dNdlogD from N, for grimm data
+    grimm_dNdlogD = calc_dNdlogD_from_N_grimm(grimm_N)
+
+    # -----------------------------------------------------------------------
+
+    # merge the dmps and APS dNdlogD datasets together...
+    # set up so data resolution is 15 mins
+    dNdlogD = merge_smps_grimm_dNdlogD(smps_dNdlogD, grimm_dNdlogD, timeRes=timeRes)
+
+    # merge the aerosol parameters together too
+    D = np.append(dmps_D, aps_D)
+    logD = np.append(dmps_logD, aps_logD)
+    dD = np.append(dmps_dD, aps_dD)
+    dlogD = np.append(dmps_dlogD, aps_dlogD)
+
+    # -----------------------------------------------------------------------
+
+    # merge the dmps and APS dNdlogD datasets together...
     # set up so data resolution is 15 mins
     dNdlogD = merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D, timeRes=timeRes)
 
