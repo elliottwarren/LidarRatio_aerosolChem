@@ -156,7 +156,8 @@ def read_grimm_and_met_vars(maindir, year):
     met_vars = {'time': grimm_N['time'],
                 'RH': raw['relative_humidity'],
                 'Tair': raw['air_temperature'],
-                'pressure': raw['air_pressure']}
+                'pressure': raw['air_pressure'],
+                'RH_frac': raw['relative_humidity']/100.0}
 
     return grimm_N, met_vars
 
@@ -700,7 +701,11 @@ def merge_smps_grimm_dNdlogD(smps_dNdlogD, grimm_dNdlogD, timeRes=60):
     for param in ['D', 'dD', 'dlogD', 'logD']:
         dNdlogD[param] = np.append(smps_dNdlogD[param], grimm_dNdlogD[param])
 
-    return dNdlogD, grimm_dNdlogD
+    # keep the index position of the original instruments D, within the combined D range
+    smps_D_idx = np.arange(len(smps_dNdlogD['D']))
+    grimm_D_idx = np.arange(smps_D_idx[-1] + 1, len(dNdlogD['D']))
+
+    return dNdlogD, grimm_dNdlogD, smps_D_idx, grimm_D_idx
 
 # processing / calculations
 
@@ -775,8 +780,8 @@ def calc_volume_and_number_mean_diameter(D_min, D_max, dNdD, dNdlogD, dlogD, D, 
 
     return Dv, Dn
 
-def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr, site_ins, RHthresh=60.0,
-                                         equate='lt', save='True'):
+def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr, smps_D_idx, grimm_D_idx,
+                                         subsample=True, RHthresh=60.0, equate='lt', save=True):
 
     """
     Create hourly version of the aerosol data for saving. Also only take data based on an RH threshold
@@ -794,26 +799,30 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
 
     # create hourly WXT and dN data
     # remove dN data where RH was above a certain threshold
-    date_range = eu.date_range(dN['time'][0], dN['time'][-1] + dt.timedelta(hours=1), 1, 'hours')
-    N_hourly = {'dN': dN['binned'], 'time': dN['time'], 'D': D, 'dD': dD}
+    # date_range = eu.date_range(dN['time'][0], dN['time'][-1] + dt.timedelta(hours=1), 1, 'hours')
+    N_hourly = {'time': dN['time'], 'D': D, 'dD': dD, 'smps_idx': smps_D_idx, 'grimm_idx': grimm_D_idx}
+
+    # copy the already avergaed up aerosol variables into N_hourly.
+    N_hourly['dN'] = deepcopy(dN['binned'])
     N_hourly['dV/dlogD'] = deepcopy(dVdlogD['binned'])
     N_hourly['dN/dlogD'] = deepcopy(dNdlogD['binned'])
     N_hourly['Dv_lt2p5'] = deepcopy(dNdlogD['Dv_lt2p5'])
     N_hourly['Dn_lt2p5'] = deepcopy(dNdlogD['Dn_lt2p5'])
     N_hourly['Dv_2p5_10'] = deepcopy(dNdlogD['Dv_2p5_10'])
     N_hourly['Dn_2p5_10'] = deepcopy(dNdlogD['Dn_2p5_10'])
-    N_hourly['RH'] = np.empty(len(dN['time']))
-    N_hourly['RH'][:] = np.nan
-    N_hourly['Tair'] = np.empty(len(dN['time']))
-    N_hourly['Tair'][:] = np.nan
-    N_hourly['pressure'] = np.empty(len(dN['time']))
-    N_hourly['pressure'][:] = np.nan
 
-    # keep RH
+
+
+    # set up empty arrays for met data tp fill
+    for met_key in ['RH', 'RH_frac', 'Tair', 'pressure']:
+        N_hourly[met_key] = np.empty(len(dN['time']))
+        N_hourly[met_key][:] = np.nan
+
+    # keep average of met variables in a separate dictionary for later diagnostics
     met_vars_avg = {}
-    for var in ['RH', 'Tair', 'pressure']:
+    for var in ['RH', 'RH_frac', 'Tair', 'pressure']:
         met_vars_avg[var] = np.empty(len(dN['time']))
-        met_vars_avg[var] = np.nan
+        met_vars_avg[var][:] = np.nan
 
     met_skip_idx = 0
 
@@ -823,7 +832,7 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
 
         met_idx = np.where(bool == True)[0] + met_skip_idx
 
-        for var in ['RH', 'Tair', 'pressure']:
+        for var in ['RH', 'RH_frac','Tair', 'pressure']:
 
             # average of variable for this time period, t
             var_i = np.nanmean(met_vars[var][met_idx])
@@ -834,30 +843,31 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
             # store met_vars_avg for diagnosis later
             met_vars_avg[var][t] = var_i
 
-        # only keep values that are less than the RH threshold by np.nan values above it
-        # only keep values if there was no rain present during the period
-        # do not remove the RH, Tair or pressure values
-        if equate == 'lt':
-            if (met_vars_avg['RH'] > RHthresh): #| (med_RR > 0.0):
-                N_hourly['dN'][t, :] = np.nan
-                N_hourly['dV/dlogD'][t, :] = np.nan
-                N_hourly['dN/dlogD'][t, :] = np.nan
-                N_hourly['Dv_lt2p5'][t] = np.nan
-                N_hourly['Dn_lt2p5'][t] = np.nan
-                N_hourly['Dv_2p5_10'][t] = np.nan
-                N_hourly['Dn_2p5_10'][t] = np.nan
+        if subsample == True:
+            # only keep values that are less than the RH threshold by np.nan values above it
+            # only keep values if there was no rain present during the period
+            # do not remove the RH, Tair or pressure values
+            if equate == 'lt':
+                if (met_vars_avg['RH'][t] > RHthresh): #| (med_RR > 0.0):
+                    N_hourly['dN'][t, :] = np.nan
+                    N_hourly['dV/dlogD'][t, :] = np.nan
+                    N_hourly['dN/dlogD'][t, :] = np.nan
+                    N_hourly['Dv_lt2p5'][t] = np.nan
+                    N_hourly['Dn_lt2p5'][t] = np.nan
+                    N_hourly['Dv_2p5_10'][t] = np.nan
+                    N_hourly['Dn_2p5_10'][t] = np.nan
 
-        # only keep values that are greater than the threshold by np.nan values below it
-        # only keep values if there was no rain present during the period
-        elif equate == 'gt':
-            if (met_vars_avg['RH'] < RHthresh): #| (med_RR > 0.0):
-                N_hourly['dN'][t, :] = np.nan
-                N_hourly['dV/dlogD'][t, :] = np.nan
-                N_hourly['dN/dlogD'][t, :] = np.nan
-                N_hourly['Dv_lt2p5'][t] = np.nan
-                N_hourly['Dn_lt2p5'][t] = np.nan
-                N_hourly['Dv_2p5_10'][t] = np.nan
-                N_hourly['Dn_2p5_10'][t] = np.nan
+            # only keep values that are greater than the threshold by np.nan values below it
+            # only keep values if there was no rain present during the period
+            elif equate == 'gt':
+                if (met_vars_avg['RH'][t] < RHthresh): #| (med_RR > 0.0):
+                    N_hourly['dN'][t, :] = np.nan
+                    N_hourly['dV/dlogD'][t, :] = np.nan
+                    N_hourly['dN/dlogD'][t, :] = np.nan
+                    N_hourly['Dv_lt2p5'][t] = np.nan
+                    N_hourly['Dn_lt2p5'][t] = np.nan
+                    N_hourly['Dv_2p5_10'][t] = np.nan
+                    N_hourly['Dn_2p5_10'][t] = np.nan
 
         # change skip idx to miss data already used in averaging
         #   so the entire time array doesn't need to be searched through for each iteration of t
@@ -868,10 +878,18 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
     # save time, Dv and N as a pickle
     # with open(pickledir + 'dN_dmps_aps_clearfloWinter.pickle', 'wb') as handle:
     #     pickle.dump(dN, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
     if save == True:
+
+        # change the savename, based on whether subsampling took place
+        if subsample == True:
+            samplesamplestr = '_'+equate+str(RHthresh)+'_cut'
+        else:
+            subsamplestr = ''
+
+        # save the data
+        # savestr will have the site name and instruments used in it
         # NOTE! DO NOT USE protocol=HIGHEST..., loading from python in linux does not work for some uknown reason...
-        with open(pickledir + 'N_hourly_'+savestr+'_'+equate+str(RHthresh)+'_cut.pickle', 'wb') as handle:
+        with open(pickledir + 'N_hourly_'+savestr+subsamplestr+'.pickle', 'wb') as handle:
             pickle.dump(N_hourly, handle)
 
     return N_hourly, met_vars
@@ -1095,7 +1113,7 @@ def main():
     if site_ins['GRIMM'] == True:
         # # Read in the GRIMM EDM data
         # # 2016 data only available from months 01 - 09 inclusively
-        grimm_N, RH = read_grimm_and_met_vars(maindir, year)
+        grimm_N, met_vars = read_grimm_and_met_vars(maindir, year)
 
         # get bin parameters and add them to the main dictionary
         grimm_N = calc_bin_parameters_grimm(grimm_N, units='nm')
@@ -1106,9 +1124,9 @@ def main():
     # -----------------------------------------------------------------------
     if (site_ins['SMPS'] == True) & (site_ins['GRIMM'] == True):
         # merge the dmps and APS dNdlogD datasets together...
-        # set up so data resolution is 15 mins
-        # grimm gets trimmed so bring it back out
-        dNdlogD, grimm_dlogD = merge_smps_grimm_dNdlogD(smps_dNdlogD, grimm_dNdlogD, timeRes=timeRes)
+        # set up so data resolution is the same
+        # grimm D bins gets trimmed so bring it back out
+        dNdlogD, grimm_dlogD, smps_D_idx, grimm_D_idx = merge_smps_grimm_dNdlogD(smps_dNdlogD, grimm_dNdlogD, timeRes=timeRes)
 
         D = dNdlogD['D']
         dD = dNdlogD['dD']
@@ -1205,35 +1223,40 @@ def main():
     D_max = 10000.0 # 10 microns
     dNdlogD['Dv_2p5_10'], dNdlogD['Dn_2p5_10'] = calc_volume_and_number_mean_diameter(D_min, D_max, dNdD, dNdlogD, dlogD, D)
 
+    # calculate the volume and number mean diameters for below 10 micron (Dv and Dn respectively)
+    D_min = 0.0 # 0 microns
+    D_max = 10000.0 # 10 microns
+    dNdlogD['Dv_10'], dNdlogD['Dn_10'] = calc_volume_and_number_mean_diameter(D_min, D_max, dNdD, dNdlogD, dlogD, D)
+
+
     # extract out only aerosol data based on the RH threshold and if it is less or more than it.
-    N_hourly, RH_avg = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr, site_ins,
-                                                    RHthresh=60.0, equate='lt', save=True)
-    N_hourly_50, _ = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr, site_ins,
-                                                       RHthresh=50.0, equate='lt', save=True)
+    N_hourly, met_avg = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
+                                    smps_D_idx, grimm_D_idx, subsample=False, RHthresh=60.0, equate='lt', save=True)
+    N_hourly_50, _ = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
+                                    smps_D_idx, grimm_D_idx, subsample=False, RHthresh=50.0, equate='lt', save=False)
 
-    plt.scatter(N_hourly['Dv_2p5_10'] * 1e-3, RH_avg, s=5)
-    plt.vlines(2.5, 20, 100, linestyle='--', alpha=0.5) # pm2.5 line
-    plt.vlines(2.25, 20, 100, linestyle='--', alpha=0.5)  # minimum diameter bin used in calculation
-    plt.vlines(10, 20, 100, linestyle='--', alpha=0.5)  # pm10
-    plt.xlabel('Dv 2.5 - 10 microns [microns]')
-    plt.ylabel('RH [%]')
-    plt.suptitle('SMPS and GRIMM 2016 Chilbolton; N = ' + str(len(dNdlogD['Dv_2p5_10'])) + '\n' +
-                  'vlines show 2.25 (lowest/nearest bin to 2.5 used); 2.5 and 10 microns')
-
-    # paste me!
-    plt.scatter(dN['binned'][:, -1] * 1e6, RH_avg, s=5)
-    plt.xlim([0, np.nanmax(dN['binned'][:, -1]) * 1e6])
+    # plt.scatter(N_hourly['Dv_2p5_10'] * 1e-3, met_avg['RH'], s=5)
     # plt.vlines(2.5, 20, 100, linestyle='--', alpha=0.5) # pm2.5 line
     # plt.vlines(2.25, 20, 100, linestyle='--', alpha=0.5)  # minimum diameter bin used in calculation
     # plt.vlines(10, 20, 100, linestyle='--', alpha=0.5)  # pm10
-    plt.xlabel('Dv 2.5 - 10 microns [microns]')
-    plt.ylabel('RH [%]')
-    plt.suptitle('SMPS and GRIMM 2016 Chilbolton; N = ' + str(len(dNdlogD['Dv_2p5_10'])) + '\n' +
-                  'vlines show 2.25 (lowest/nearest bin to 2.5 used); 2.5 and 10 microns')
+    # plt.xlabel('Dv 2.5 - 10 microns [microns]')
+    # plt.ylabel('RH [%]')
+    # plt.suptitle('SMPS and GRIMM 2016 Chilbolton; N = ' + str(len(dNdlogD['Dv_2p5_10'])) + '\n' +
+    #               'vlines show 2.25 (lowest/nearest bin to 2.5 used); 2.5 and 10 microns')
+    #
+    # plt.scatter(dN['binned'][:, -1] * 1e6, met_avg['RH'], s=5)
+    # plt.xlim([0, np.nanmax(dN['binned'][:, -1]) * 1e6])
+    # # plt.vlines(2.5, 20, 100, linestyle='--', alpha=0.5) # pm2.5 line
+    # # plt.vlines(2.25, 20, 100, linestyle='--', alpha=0.5)  # minimum diameter bin used in calculation
+    # # plt.vlines(10, 20, 100, linestyle='--', alpha=0.5)  # pm10
+    # plt.xlabel('Dv 2.5 - 10 microns [microns]')
+    # plt.ylabel('RH [%]')
+    # plt.suptitle('SMPS and GRIMM 2016 Chilbolton; N = ' + str(len(dNdlogD['Dv_2p5_10'])) + '\n' +
+    #               'vlines show 2.25 (lowest/nearest bin to 2.5 used); 2.5 and 10 microns')
 
-    # quickplot what it looks like
-    quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir)
-    quick_plot_dN(N_hourly, N_hourly_50, dNdlogD, savestr, savedir)
+    # # quickplot what it looks like
+    # quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir)
+    # quick_plot_dN(N_hourly, N_hourly_50, dNdlogD, savestr, savedir)
 
     # # calc dN/dD (n_N(Dp)) from dN/dlogD: Seinfeld and Pandis 2007 eqn 8.18
     # first extract and store the value for the current t, from each bin
