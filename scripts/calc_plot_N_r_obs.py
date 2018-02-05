@@ -147,6 +147,11 @@ def read_grimm_and_met_vars(maindir, year):
         raw['number_concentration_of_ambient_aerosol_in_air'].reshape(
                  (len(raw['number_concentration_of_ambient_aerosol_in_air'])/num_D_bins,
                   num_D_bins))
+
+    # remove bad data for the entire row, if any one value in the row is bad (fill value for bad data = -999)
+    idx = np.where(grimm_N['binned'] < 0.0)[0] # juts the row [0]
+    grimm_N['binned'][idx, :] = np.nan
+
     grimm_N['binned'] *= 1e-06 # convert from m-3 to cm-3
     # multiple read in would just keep concatonating the diameters over and over
     grimm_N['D'] = test['particle_diameter'] *1e03 # convert from microns to nm
@@ -979,7 +984,7 @@ def quick_plot_dN(N_hourly, N_hourly_50, dNdlogD, savestr, savedir):
 
     return
 
-def main():
+if __name__ == '__main__':
 
 
     # ==============================================================================
@@ -1476,9 +1481,5 @@ def main():
     plt.savefig(savedir + 'aerosol_distributions/rv_Ben_help.png')
     # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
 
-    return
-
-if __name__ == '__main__':
-    main()
 
 print 'END PROGRAM'
