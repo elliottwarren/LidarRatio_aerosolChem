@@ -864,6 +864,10 @@ def calc_geometric_mean_and_stdev_radius(size_range_idx, dNdD, dNdlogD, dlogD, D
     r_g = np.empty(len(dNdlogD['time']))
     r_g[:] = np.nan # 2nd part of eqn for Dv
 
+    # stdevg = geometric standard deviation RADIUS
+    stdev_g_r = np.empty(len(dNdlogD['time']))
+    stdev_g_r[:] = np.nan
+
     for t in range(len(dNdD['time'])):
 
         # 1. Gemoetric number mean diameter
@@ -884,15 +888,13 @@ def calc_geometric_mean_and_stdev_radius(size_range_idx, dNdD, dNdlogD, dlogD, D
 
 
 
-
-
         # 2. Geometric standard deviation
         #   same sources as above
-        x4 = (dNdlogr[t, size_range_idx] * dlogr) * ((logr[size_range_idx] - r_g[t]) ** 2.0)
-        y4 = np.sum(dNdlogr[t, size_range_idx] * dlogr[size_range_idx]) - 1 # N
+        x4 = (dNdlogr[t, size_range_idx] * dlogr) * ((logr[size_range_idx] - r_g[t]) ** 2.0) # Ni * (diff in r from mean)**2
+        y4 = np.sum(dNdlogr[t, size_range_idx] * dlogr[size_range_idx]) - 1 # N - 1
 
-
-
+        # as the data uses log10, use that base to recover stdev_g_r
+        stdev_g_r[t] = 10 ** ((np.sum(x4) / y4) ** 0.5)
 
     return r_g
 
