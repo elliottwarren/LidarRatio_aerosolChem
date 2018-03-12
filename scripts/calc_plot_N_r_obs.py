@@ -720,13 +720,27 @@ def merge_smps_grimm_dNdlogD(smps_dNdlogD, grimm_dNdlogD, timeRes=60):
 
 # processing / calculations
 
-def calc_volume_and_number_mean_diameter(D_min, D_max, dNdD, dNdlogD, dlogD, D, units='nm'):
+def get_size_range_idx(D, D_min, D_max):
 
     """
-    Calcualted volume and number mean diameter.
+    Get the size range idx for all diameters between the given minimum and maximum diameters.
+    :return: accum_range_idx
 
-    :param D_min: lower diameter threshold
-    :param D_max: upper diameter threshold
+    Function would work if diameter was replaced with radius
+    """
+
+    accum_minD, accum_minD_idx, _ = eu.nearest(D, D_min)
+    accum_maxD, accum_maxD_idx, _ = eu.nearest(D, D_max)
+    accum_range_idx = range(accum_minD_idx, accum_maxD_idx + 1)
+
+    return accum_range_idx
+
+def calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D, units='nm'):
+
+    """
+    Calcualted volume and number mean diameter
+
+    :param size_range_idx: idx for the size range
     :param dNdD:
     :param dNdlogD:
     :param dlogD:
@@ -735,13 +749,8 @@ def calc_volume_and_number_mean_diameter(D_min, D_max, dNdD, dNdlogD, dlogD, D, 
     :return: Dn: number mean diameter
 
     Units are in nm be default but should match the units used by the variable 'D' and 'dlogD'
+    NOTE: N * D = sum of all the particles D's.
     """
-
-    # NOTE! D is in nm
-    # try 0.02 to 0.7 microns first
-    accum_minD, accum_minD_idx, _ = eu.nearest(D, D_min)
-    accum_maxD, accum_maxD_idx, _ = eu.nearest(D, D_max)
-    accum_range_idx = range(accum_minD_idx, accum_maxD_idx + 1)
 
     # set up arrays to fill
     # Dv = volume mean diameter
@@ -752,42 +761,140 @@ def calc_volume_and_number_mean_diameter(D_min, D_max, dNdD, dNdlogD, dlogD, D, 
     Dn = np.empty(len(dNdlogD['time']))
     Dn[:] = np.nan # 2nd part of eqn for Dv
 
-    # # Dg = geometric mean diameter
-    # Dg = np.empty(len(dNdlogD['time']))
-    # Dg[:] = np.nan # 2nd part of eqn for Dv
+    # Dg = geometric mean diameter
+    Dg = np.empty(len(dNdlogD['time']))
+    Dg[:] = np.nan # 2nd part of eqn for Dv
 
     # Get volume mean diameter
     for t in range(len(dNdD['time'])):
 
-        # Volume mean diameter
+        # 1. Volume mean diameter
         # calculate two parts of the eq. first
         # # dNdlogD * dlogD * D = N of original bin
         # 1/6 * pi * D**3 = V (volume sphere)
         #   below = sum(V * D) / sum(V)
-        x4 = dNdlogD['binned'][t, accum_range_idx] * dlogD[accum_range_idx] * (D[accum_range_idx] ** 4.0)  # V * D
-        y3 = dNdlogD['binned'][t, accum_range_idx] * dlogD[accum_range_idx] * (D[accum_range_idx] ** 3.0)  # just V
+        x1 = dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx] * (D[size_range_idx] ** 4.0)  # V * D
+        y1 = dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx] * (D[size_range_idx] ** 3.0)  # just V
 
         # once all bins for time t have been calculated, sum them up
-        Dv[t] = np.sum(x4)/np.sum(y3)
+        Dv[t] = np.sum(x1)/np.sum(y1)
 
-        # Number mean diameter
+        # 2. Number mean diameter
         # calculate two parts of the eq. first
         # dNdlogD * dlogD * D = N of original bin
         #   -> sum(N * D) / sum(N) = number mean
 
-        x1 = dNdlogD['binned'][t, accum_range_idx] * dlogD[accum_range_idx] * D[accum_range_idx] # N* D
-        y1 = dNdlogD['binned'][t, accum_range_idx] * dlogD[accum_range_idx]
+        x2 = dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx] * D[size_range_idx] # N* D
+        y2 = dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx]
 
-        Dn[t] = np.sum(x1)/np.sum(y1)
+        Dn[t] = np.sum(x2)/np.sum(y2)
 
 
         # gemoetric number mean diameter
-        # x1 = dNdlogD['binned'][t, accum_range_idx] * dlogD[accum_range_idx] * D[accum_range_idx] # N* D
-        # y1 = dNdlogD['binned'][t, accum_range_idx] * dlogD[accum_range_idx]
-        #
-        # Dg[t] = np.prod(x1) ** (1.0/np.sum(y1))
+        # source 1: CMD or Dg:
+        #    http://www.tsi.com/uploadedFiles/_Site_Root/Products/Literature/Application_Notes/PR-001-RevA_Aerosol-Statistics-AppNote.pdf
+        # source 2: section 1.3: http://eodg.atm.ox.ac.uk/user/grainger/research/aerosols.pdf
+        x3 = D[size_range_idx] ** (dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx]) #[D1**n1, D2**n2 ...] (TSI notes)
+        y3 = dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx] # [n1, n2 ... nN]
+
+        Dg[t] = np.prod(x3) ** (1.0/np.sum(y3))
+
+
 
     return Dv, Dn
+
+def calc_geometric_mean_and_stdev_radius(size_range_idx, dNdD, dNdlogD, dlogD, D, units='nm'):
+
+    """
+    Calcualted the geometric mean and geometric standard deviation of the aerosol distribution with respect to RADIUS
+        as required by SOCRATES
+
+    :param size_range_idx: idx for the size range
+    :param dNdD:
+    :param dNdlogD:
+    :param dlogD:
+    :param D:
+    :return: Dv: volume mean diameter
+    :return: Dn: number mean diameter
+
+    Units are in nm be default but should match the units used by the variable 'D' and 'dlogD'
+    NOTE: N * D = sum of all the particles D's.
+    """
+
+    # calculated r parameters from D
+    def calc_r_parameters(D):
+
+        """
+        Calculate radii parameters from the diameter
+        :param D:
+        :return: r parameters: r, dr, logr, dlogr
+        """
+
+        # calc r from D
+        r = D/2.0
+
+        # bin max -> the bin + half way to the next bin
+        r_diffs = r[1:] - r[:-1]  # checked
+        r_max = r[:-1] + (r_diffs / 2.0)  # checked
+
+        # upper edge difference for the last bin is assumed be equal to the upper edge difference of the second to last bin
+        #   therefore add the upper edge difference of the second to last bin, to the last bin.
+        r_max = np.append(r_max, r[-1] + (r_diffs[-1] / 2.0))  # checked
+        # lower edge difference for the first bin is assumed to be equal to the lower edge difference of the second bin,
+        #   therefore subtract the lower edge difference of the second bin, from the first bin.
+        # lower edge of subsequent bins = upper edge of the previous bin, hence using r_max[:-1]
+        r_min = np.append(r[0] - (r_diffs[0] / 2.0), r_max[:-1])  # checked
+
+        # bin parameters
+        logr = np.log10(r)
+
+        # bin widths
+        dr = r_max - r_min
+        dlogr = np.log10(r_max) - np.log10(r_min)
+
+        return r, dr, logr, dlogr
+
+    # calculat r parameters from D and log(D)
+    r, dr, logr, dlogr = calc_r_parameters(D)
+
+    # create dNdlogr to calculate geometric standard deviation lower down
+    dNdlogr = (dNdlogD['binned'] * dlogD) / dlogr
+
+    # Dg = geometric mean diameter
+    r_g = np.empty(len(dNdlogD['time']))
+    r_g[:] = np.nan # 2nd part of eqn for Dv
+
+    for t in range(len(dNdD['time'])):
+
+        # 1. Gemoetric number mean diameter
+        # source 1: CMD or Dg:
+        #    http://www.tsi.com/uploadedFiles/_Site_Root/Products/Literature/Application_Notes/PR-001-RevA_Aerosol-Statistics-AppNote.pdf
+        # source 2: section 1.3: http://eodg.atm.ox.ac.uk/user/grainger/research/aerosols.pdf
+        y3 = dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx] # [n1, n2 ... nN]
+        y4 = (1.0 / np.sum(y3))  # 1/N
+
+        # [(D1**n1)**1/N, (D2**n2)**1/N ...] (rearanged eq from TSI notes as otherwise the computer cant store the number properly!)
+        x3 = (D[size_range_idx] ** (dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx])) ** y4
+
+        # geometric mean diameter
+        Dg = np.sum(x3)
+
+        # geometric mean radius
+        r_g[t] = Dg / 2.0
+
+
+
+
+
+        # 2. Geometric standard deviation
+        #   same sources as above
+        x4 = (dNdlogr[t, size_range_idx] * dlogr) * ((logr[size_range_idx] - r_g[t]) ** 2.0)
+        y4 = np.sum(dNdlogr[t, size_range_idx] * dlogr[size_range_idx]) - 1 # N
+
+
+
+
+    return r_g
 
 def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr, smps_D_idx, grimm_D_idx,
                                          subsample=True, RHthresh=60.0, equate='lt', save=True):
@@ -1301,10 +1408,11 @@ if __name__ == '__main__':
     # calculate the volume and number mean diameters for the given diameter range (Dv and Dn respectively)
     D_min = 40.0
     D_max = 700.0
-    dNdlogD['Dv_accum'], dNdlogD['Dn_accum'] = calc_volume_and_number_mean_diameter(D_min, D_max, dNdD, dNdlogD, dlogD, D)
 
-    # calculate the geometric standard deviation for the given diameter range
+    # get the idx for the accumulation range
+    accum_range_idx = get_size_range_idx(D, D_min, D_max)
 
+    dNdlogD['Dv_accum'], dNdlogD['Dn_accum'] = calc_volume_and_number_mean_diameter(accum_range_idx, dNdD, dNdlogD, dlogD, D)
 
     # plot time series of r for defined acumm range
     fig = plt.figure()
