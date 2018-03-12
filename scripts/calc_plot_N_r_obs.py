@@ -140,7 +140,7 @@ def read_grimm_and_met_vars(maindir, year):
     # RH [%]; Tair [K]; pressure [Pa]
     raw = eu.netCDF_read(grimmpaths,
                 vars=['number_concentration_of_ambient_aerosol_in_air',
-                      'relative_humidity', 'air_temperature', 'air_pressure', 'time'])
+                      'relative_humidity', 'air_temperature', 'air_pressure', 'wind_speed', 'wind_from_direction', 'time'])
 
     grimm_N = {}
     grimm_N['binned'] = \
@@ -148,11 +148,17 @@ def read_grimm_and_met_vars(maindir, year):
                  (len(raw['number_concentration_of_ambient_aerosol_in_air'])/num_D_bins,
                   num_D_bins))
 
+    # QAQC GRIMM data
     # remove bad data for the entire row, if any one value in the row is bad (fill value for bad data = -999)
     idx = np.where(grimm_N['binned'] < 0.0)[0] # juts the row [0]
     grimm_N['binned'][idx, :] = np.nan
 
-    grimm_N['binned'] *= 1e-06 # convert from m-3 to cm-3
+    # some unrealistically high values can occur in the highest bins
+    idx = np.where(grimm_N['binned'][:, -1] > 0.0001)[0] # 100 cm-3 where D = 32 microns...
+    grimm_N['binned'][idx, :] = np.nan
+
+    # convert from m-3 to cm-3
+    grimm_N['binned'] *= 1e-06
     # multiple read in would just keep concatonating the diameters over and over
     grimm_N['D'] = test['particle_diameter'] *1e03 # convert from microns to nm
     grimm_N['time'] = raw['time']
@@ -768,8 +774,6 @@ def calc_volume_and_number_mean_diameter(D_min, D_max, dNdD, dNdlogD, dlogD, D, 
         # calculate two parts of the eq. first
         # dNdlogD * dlogD * D = N of original bin
         #   -> sum(N * D) / sum(N) = number mean
-        # x1 = dNdlogD['binned'][t, accum_range_idx] * dlogD[accum_range_idx] * (D[accum_range_idx] ** 2.0) # N* D
-        # y1 = dNdlogD['binned'][t, accum_range_idx] * dlogD[accum_range_idx] * D[accum_range_idx]
 
         x1 = dNdlogD['binned'][t, accum_range_idx] * dlogD[accum_range_idx] * D[accum_range_idx] # N* D
         y1 = dNdlogD['binned'][t, accum_range_idx] * dlogD[accum_range_idx]
@@ -901,7 +905,18 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
 
 # plotting
 
-def quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir):
+def quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir, saveFile=False):
+
+    """
+
+
+    :param N_hourly:
+    :param N_hourly_50:
+    :param dVdlogD:
+    :param args: can include savestr, savedir.
+    :param save:
+    :return:
+    """
 
     # median, IQRs
     N_hourly['median'] = np.nanmedian(N_hourly['dV/dlogD'], axis=0)
@@ -919,26 +934,23 @@ def quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir):
 
     # plot volume distribution for data (median with IQR)
     # ok to use D from N_hourly as the bins are the same as the normal D variable
-    fig = plt.figure(figsize=(5, 2.5))
+    fig = plt.figure(figsize=(6, 3.5))
     plt.semilogx(N_hourly['D']*1e-3, N_hourly['median']*1e-10, label=r'$RH < 60\%$', color='red')
     plt.semilogx(N_hourly['D']*1e-3, N_hourly_50['median']*1e-10, label=r'$RH < 50\%$', color='green')
     plt.semilogx(N_hourly['D']*1e-3, dVdlogD['median']*1e-10, label=r'$all \/\/data$', color='blue')
-    # plt.vlines(0.5, 0, 3, linestyle='--', alpha=0.5)
-    plt.vlines(0.604, 0, 3, linestyle='--', alpha=0.5)
+    #  plt.vlines(0.5, 0, 3, linestyle='--', alpha=0.5) # DMPS and APS (NK ClearfLo)?
+    # plt.vlines(0.604, 0, 3, linestyle='--', alpha=0.5) # SMPS and GRIMM (Ch)
     plt.fill_between(N_hourly['D']*1e-3, N_hourly['25th']*1e-10, N_hourly['75th']*1e-10, alpha=0.2, facecolor='red', label=r'$RH < 60\% \/\/IQR$')
     plt.fill_between(N_hourly['D']*1e-3, N_hourly_50['25th']*1e-10, N_hourly_50['75th']*1e-10, alpha=0.2, facecolor='green', label=r'$RH < 50\% IQR$')
     plt.fill_between(N_hourly['D'] * 1e-3, dVdlogD['25th']*1e-10, dVdlogD['75th']*1e-10, alpha=0.2, facecolor='blue', label=r'$all \/\/data \/\/IQR$')
     plt.ylabel('dV/dlogD '+r'$[1^{10}\/nm^{3}\/ cm^{-3}]$', labelpad=0)
     plt.xlabel(r'$Diameter \/\/[\mu m]$', labelpad=-3)
     # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
-    plt.legend()
+    plt.legend(loc='best', fontsize='8')
     plt.tight_layout()
-    plt.savefig(savedir + 'aerosol_distributions/dVdlogD_v_D_'+savestr+'_combined_below60_and50.png')
-    plt.close(fig)
-    # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
-
-
-
+    if saveFile == True:
+        plt.savefig(savedir + 'aerosol_distributions/dVdlogD_v_D_'+savestr+'_combined_below60_and50.png')
+        plt.close(fig)
 
     return
 
@@ -991,10 +1003,6 @@ if __name__ == '__main__':
     # Setup
     # ==============================================================================
 
-    # which modelled data to read in
-    model_type = 'UKV'
-    res = FOcon.model_resolution[model_type]
-
     # directories
     maindir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/'
     datadir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/'
@@ -1022,6 +1030,8 @@ if __name__ == '__main__':
     # time resolution of output data in minutes
     timeRes = 60
 
+    # save string
+    savestr = site_ins['site_short'] + '_SMPS_GRIMM'
 
     # ==============================================================================
     # Read data
@@ -1236,9 +1246,9 @@ if __name__ == '__main__':
 
     # extract out only aerosol data based on the RH threshold and if it is less or more than it.
     N_hourly, met_avg = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
-                                    smps_D_idx, grimm_D_idx, subsample=False, RHthresh=60.0, equate='lt', save=True)
+                                    smps_D_idx, grimm_D_idx, subsample=True, RHthresh=60.0, equate='lt', save=False)
     N_hourly_50, _ = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
-                                    smps_D_idx, grimm_D_idx, subsample=False, RHthresh=50.0, equate='lt', save=False)
+                                    smps_D_idx, grimm_D_idx, subsample=True, RHthresh=50.0, equate='lt', save=False)
 
     # plt.scatter(N_hourly['Dv_2p5_10'] * 1e-3, met_avg['RH'], s=5)
     # plt.vlines(2.5, 20, 100, linestyle='--', alpha=0.5) # pm2.5 line
@@ -1261,7 +1271,8 @@ if __name__ == '__main__':
 
     # # quickplot what it looks like
     # quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir)
-    # quick_plot_dN(N_hourly, N_hourly_50, dNdlogD, savestr, savedir)
+    quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir, saveFile=False)
+    quick_plot_dN(N_hourly, N_hourly_50, dNdlogD, savestr, savedir)
 
     # # calc dN/dD (n_N(Dp)) from dN/dlogD: Seinfeld and Pandis 2007 eqn 8.18
     # first extract and store the value for the current t, from each bin
@@ -1289,8 +1300,11 @@ if __name__ == '__main__':
     # NOTE! D is in nm
     # calculate the volume and number mean diameters for the given diameter range (Dv and Dn respectively)
     D_min = 40.0
-    D_max = 2000.0
+    D_max = 700.0
     dNdlogD['Dv_accum'], dNdlogD['Dn_accum'] = calc_volume_and_number_mean_diameter(D_min, D_max, dNdD, dNdlogD, dlogD, D)
+
+    # calculate the geometric standard deviation for the given diameter range
+
 
     # plot time series of r for defined acumm range
     fig = plt.figure()
