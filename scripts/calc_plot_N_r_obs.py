@@ -807,17 +807,18 @@ def calc_geometric_mean_and_stdev_radius(size_range_idx, dNdD, dNdlogD, dlogD, D
 
     """
     Calcualted the geometric mean and geometric standard deviation of the aerosol distribution with respect to RADIUS
-        as required by SOCRATES
+    as required by SOCRATES
 
     :param size_range_idx: idx for the size range
     :param dNdD:
     :param dNdlogD:
     :param dlogD:
     :param D:
-    :return: Dv: volume mean diameter
-    :return: Dn: number mean diameter
+    :return: r_g: geometric mean of the radii distribution
+    :return: stdev_g_r: geometric standard deviation of the radii distribution
 
-    Units are in nm be default but should match the units used by the variable 'D' and 'dlogD'
+    Units are in nm be default but should match the units used by the variable 'D' and 'dlogD'.
+    xn and yn are parts of the main equations.
     NOTE: N * D = sum of all the particles D's.
     """
 
@@ -870,33 +871,46 @@ def calc_geometric_mean_and_stdev_radius(size_range_idx, dNdD, dNdlogD, dlogD, D
 
     for t in range(len(dNdD['time'])):
 
+        # # 1. Gemoetric number mean diameter
+        # # source 1: CMD or Dg:
+        # #    http://www.tsi.com/uploadedFiles/_Site_Root/Products/Literature/Application_Notes/PR-001-RevA_Aerosol-Statistics-AppNote.pdf
+        # # source 2: section 1.3: http://eodg.atm.ox.ac.uk/user/grainger/research/aerosols.pdf
+        # x1 = dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx] # [n1, n2 ... nN]
+        # x2 = (1.0 / np.sum(x1))  # 1/N
+        #
+        # # [(D1**(n1*1/N), (D2**(n2*1/N) ...] (rearanged eq from TSI notes as otherwise the computer cant store the number properly!)
+        # x3 = (D[size_range_idx] ** ((dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx]) * x2))
+        #
+        # # geometric mean diameter
+        # Dg = np.prod(x3)
+        #
+        # # geometric mean radius
+        # r_g[t] = Dg / 2.0
+
         # 1. Gemoetric number mean diameter
         # source 1: CMD or Dg:
         #    http://www.tsi.com/uploadedFiles/_Site_Root/Products/Literature/Application_Notes/PR-001-RevA_Aerosol-Statistics-AppNote.pdf
         # source 2: section 1.3: http://eodg.atm.ox.ac.uk/user/grainger/research/aerosols.pdf
-        y3 = dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx] # [n1, n2 ... nN]
-        y4 = (1.0 / np.sum(y3))  # 1/N
+        x1 = dNdlogr[t, size_range_idx] * dlogr[size_range_idx] # [n1, n2 ... nN]
+        x2 = (1.0 / np.sum(x1))  # 1/N
 
-        # [(D1**n1)**1/N, (D2**n2)**1/N ...] (rearanged eq from TSI notes as otherwise the computer cant store the number properly!)
-        x3 = (D[size_range_idx] ** (dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx])) ** y4
+        # [(D1**(n1*1/N), (D2**(n2*1/N) ...] (rearanged eq from TSI notes as otherwise the computer cant store the number properly!)
+        x3 = (r[size_range_idx] ** ((dNdlogr[t, size_range_idx] * dlogr[size_range_idx]) * x2))
 
         # geometric mean diameter
-        Dg = np.sum(x3)
-
-        # geometric mean radius
-        r_g[t] = Dg / 2.0
-
+        r_g[t] = np.prod(x3)
 
 
         # 2. Geometric standard deviation
         #   same sources as above
-        x4 = (dNdlogr[t, size_range_idx] * dlogr) * ((logr[size_range_idx] - r_g[t]) ** 2.0) # Ni * (diff in r from mean)**2
-        y4 = np.sum(dNdlogr[t, size_range_idx] * dlogr[size_range_idx]) - 1 # N - 1
+        y1 = (dNdlogr[t, size_range_idx] * dlogr[size_range_idx]) * ((logr[size_range_idx] - np.log10(r_g[t])) ** 2.0) # Ni * (diff in r from mean)**2
+
+        y2 = np.sum(dNdlogr[t, size_range_idx] * dlogr[size_range_idx]) - 1 # N - 1
 
         # as the data uses log10, use that base to recover stdev_g_r
-        stdev_g_r[t] = 10 ** ((np.sum(x4) / y4) ** 0.5)
+        stdev_g_r[t] = 10 ** ((np.sum(y1) / y2) ** 0.5)
 
-    return r_g
+    return r_g, stdev_g_r
 
 def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr, smps_D_idx, grimm_D_idx,
                                          subsample=True, RHthresh=60.0, equate='lt', save=True):
@@ -1105,6 +1119,57 @@ def quick_plot_dN(N_hourly, N_hourly_50, dNdlogD, savestr, savedir):
 
     return
 
+def quick_plot_stdev_g_r(dNdlogD, D_min, D_max):
+
+    """
+    Quick plot of the geometric standard deviation
+    :param dNdlogD:
+    :param D_min:
+    :param D_max:
+    :return:
+    """
+
+    # plot histogram of r_g
+    dataset = dNdlogD['stdev_g_r'][~np.isnan(dNdlogD['stdev_g_r'])]
+    stdev_g_r_mean = np.nanmean(dNdlogD['stdev_g_r'])
+
+    plt.hist(dataset, bins=20)
+    date_range_str = dNdlogD['time'][0].strftime('%Y/%m/%d') + ' - ' + dNdlogD['time'][-1].strftime('%Y/%m/%d')
+    accum_range_radii_str = str(D_min/2.0) + '-' + str(D_max/2.0) + 'nm'
+    plt.suptitle(site_ins['site_long'] + '; '+date_range_str + ';\n radii range: ' + accum_range_radii_str + '; mean: ' + str(stdev_g_r_mean))
+    plt.ylabel('frequency')
+    plt.xlabel('geometric standard deviation')
+    plt.savefig(savedir + 'geometric_stdev_mean/' + 'geo_stdev_r_'+site_ins['site_short'] + '_' + accum_range_radii_str +'.png')
+    plt.close()
+
+    return
+
+def quick_plot_r_g(dNdlogD, D_min, D_max):
+
+    """
+    Quick plot the geometric mean radius
+
+    :param dNdlogD:
+    :param D_min:
+    :param D_max:
+    :return:
+    """
+
+    # plot histogram of r_g
+    dataset = dNdlogD['r_g'][~np.isnan(dNdlogD['r_g'])]
+    r_g_mean = np.nanmean(dNdlogD['r_g'])
+
+    plt.hist(dataset, bins=20)
+    date_range_str = dNdlogD['time'][0].strftime('%Y/%m/%d') + ' - ' + dNdlogD['time'][-1].strftime('%Y/%m/%d')
+    accum_range_radii_str = str(D_min/2.0) + '-' + str(D_max/2.0) + 'nm'
+    plt.suptitle(site_ins['site_long'] + '; '+date_range_str + ';\n radii range: ' + accum_range_radii_str + '; mean: ' + str(r_g_mean))
+    plt.ylabel('frequency')
+    plt.xlabel('geometric mean radius [nm]')
+    plt.savefig(savedir + 'geometric_stdev_mean/' + 'geo_mean_r_'+site_ins['site_short'] + '_' + accum_range_radii_str +'.png')
+    plt.close()
+
+    return
+
 if __name__ == '__main__':
 
 
@@ -1128,7 +1193,7 @@ if __name__ == '__main__':
     # site and instruments
     # period: 'routine' if the obs are routinely taken
     # site_ins = {'site_short':'NK', 'site_long': 'North_Kensington', 'period': 'ClearfLo',
-    #           'DMPS': True, 'APS': True, 'SMPS': False}
+    #           'DMPS': True, 'APS': True, 'SMPS': False, 'GRIMM': False}
     site_ins = {'site_short':'Ch', 'site_long': 'Chilbolton', 'period': 'routine',
                 'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': True}
 
@@ -1359,25 +1424,6 @@ if __name__ == '__main__':
     N_hourly_50, _ = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
                                     smps_D_idx, grimm_D_idx, subsample=True, RHthresh=50.0, equate='lt', save=False)
 
-    # plt.scatter(N_hourly['Dv_2p5_10'] * 1e-3, met_avg['RH'], s=5)
-    # plt.vlines(2.5, 20, 100, linestyle='--', alpha=0.5) # pm2.5 line
-    # plt.vlines(2.25, 20, 100, linestyle='--', alpha=0.5)  # minimum diameter bin used in calculation
-    # plt.vlines(10, 20, 100, linestyle='--', alpha=0.5)  # pm10
-    # plt.xlabel('Dv 2.5 - 10 microns [microns]')
-    # plt.ylabel('RH [%]')
-    # plt.suptitle('SMPS and GRIMM 2016 Chilbolton; N = ' + str(len(dNdlogD['Dv_2p5_10'])) + '\n' +
-    #               'vlines show 2.25 (lowest/nearest bin to 2.5 used); 2.5 and 10 microns')
-    #
-    # plt.scatter(dN['binned'][:, -1] * 1e6, met_avg['RH'], s=5)
-    # plt.xlim([0, np.nanmax(dN['binned'][:, -1]) * 1e6])
-    # # plt.vlines(2.5, 20, 100, linestyle='--', alpha=0.5) # pm2.5 line
-    # # plt.vlines(2.25, 20, 100, linestyle='--', alpha=0.5)  # minimum diameter bin used in calculation
-    # # plt.vlines(10, 20, 100, linestyle='--', alpha=0.5)  # pm10
-    # plt.xlabel('Dv 2.5 - 10 microns [microns]')
-    # plt.ylabel('RH [%]')
-    # plt.suptitle('SMPS and GRIMM 2016 Chilbolton; N = ' + str(len(dNdlogD['Dv_2p5_10'])) + '\n' +
-    #               'vlines show 2.25 (lowest/nearest bin to 2.5 used); 2.5 and 10 microns')
-
     # # quickplot what it looks like
     # quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir)
     quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir, saveFile=False)
@@ -1393,7 +1439,6 @@ if __name__ == '__main__':
         # total_dV += [dVdD[key][t]]  # just dV/dD data
         x4 = dNdlogD['binned'][t, :] * dlogD * (D ** 4.0)  # turn dN/dD into dN (hopefully)
         y3 = dNdlogD['binned'][t, :] * dlogD * (D ** 3.0)  # just dV/dD data
-
 
         # once all bins for time t have been calculated, sum them up
         dNdlogD['Dv'][t] = np.sum(x4)/np.sum(y3)
@@ -1414,7 +1459,21 @@ if __name__ == '__main__':
     # get the idx for the accumulation range
     accum_range_idx = get_size_range_idx(D, D_min, D_max)
 
+    # calculate the mean volume and mean number diameter
     dNdlogD['Dv_accum'], dNdlogD['Dn_accum'] = calc_volume_and_number_mean_diameter(accum_range_idx, dNdD, dNdlogD, dlogD, D)
+
+    # calculate the geometric mean and geometric standard deviation of the radius
+    dNdlogD['r_g'], dNdlogD['stdev_g_r'] = calc_geometric_mean_and_stdev_radius(accum_range_idx, dNdD, dNdlogD, dlogD, D, units='nm')
+
+    # statistics and plots on r_g and stdev_g_r
+    quick_plot_r_g(dNdlogD, D_min, D_max)
+    quick_plot_stdev_g_r(dNdlogD, D_min, D_max)
+
+    # plot histogram of r_g
+    dataset = dNdlogD['r_g'][~np.isnan(dNdlogD['r_g'])]
+    plt.hist(dataset)
+
+    plt.scatter(dNdlogD['r_g'][~np.isnan(dNdlogD['r_g'])], dNdlogD['stdev_g_r'][~np.isnan(dNdlogD['stdev_g_r'])])
 
     # plot time series of r for defined acumm range
     fig = plt.figure()
@@ -1437,19 +1496,7 @@ if __name__ == '__main__':
     #
     # np.nanmean(dNdlogD['Ntot_accum'])
     #
-    # # plot time series of N for defined acumm range
-    # fig = plt.figure()
-    # # plt.plot((dVdD['Dv'] * 1e-3) / 2, label='rv using dN/dD')
-    # plt.plot_date(dNdlogD['time'], dNdlogD['Ntot_accum'], linestyle='-', fmt='-')
-    # plt.ylabel('Ntot [cm-3]')
-    # plt.xlabel('Date [dd/mm]')
-    # ax = plt.gca()
-    # ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
-    # # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
-    # plt.legend()
-    # plt.savefig(savedir + 'aerosol_distributions/Ntot_accum_0p02_0p7_'+savestr+'.png')
-    # plt.close(fig)
-    # # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
+
     #
     # # save time, Dv and N as a pickle
     # pickle_save = {'time': dNdlogD['time'], 'Ntot': dNdlogD['Ntot_accum'], 'Dv': dNdlogD['Dv_accum']}
