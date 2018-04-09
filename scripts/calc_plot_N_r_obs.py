@@ -172,7 +172,7 @@ def read_grimm_and_met_vars(maindir, year):
 
     return grimm_N, met_vars
 
-def read_aps(filepath_aps):
+def read_clearflo_aps(filepath_aps):
 
     """
     Read in the apd data from clearflo. Very similar structure to read_dmps()
@@ -208,6 +208,53 @@ def read_aps(filepath_aps):
 
     return N, header_bins
 
+def read_routine_aps(filepath_aps):
+
+    """
+    Read in the routinely taken APS data, given to us by ERG
+    :param filepath_aps:
+    :return: N [dictionary with each header as a key]
+    :return: header_mid: the headers [list of strings]
+    """
+
+    # APS headers
+    filepath_aps_headers = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/ERG/' \
+                    'APS species definitions.xlsx'
+
+    # read main data
+    N_raw = np.genfromtxt(filepath_aps, delimiter=',', dtype='|S20')
+    pro_time = np.array([dt.datetime.strptime(i, '%d-%m-%y %H:%M') for i in aps_N[1:, 0]])
+
+    # get headers and idx for just the particle size data - ignore the first column as it is <0.523
+    raw_headers = np.array([i.split('@')[0] for i in N_raw[0]])
+    particle_bool = np.array([True if (((i[:2] == 'P1') | (i[:2] == 'P2')) & (i != 'P165')) # SKIP 165 - 1st header
+                              else False for i in raw_headers])
+    particle_idx = np.where(particle_bool == True)
+    raw_headers_particles = raw_headers[particle_idx]
+
+    # read in APS header definitions - ignore the first column as it is <0.523
+    header_defs = pandas.read_excel(filepath_aps_headers, skiprows=1)
+    header_defs_array = np.asarray(header_defs)
+    header_split = np.array([i[1].split(' ') for i in header_defs_array])
+    header_orig = np.array([str(i[0]) for i in header_defs_array])
+    header_mid = np.array([str(i[3]) for i in header_split])
+
+    # if the headers line up
+    if header_orig[0] == raw_headers_particles[0]:
+
+        # turn raw into a dictionary
+        N = {}
+        for i, head in zip(particle_idx[0], header_mid):
+            N[head] = np.array([np.nan if j == '' else j for j in N_raw[1:, i]], dtype=float)
+
+    else:
+        raise ValueError('Headers do not allign between APS data and APS definitions!')
+
+    # add time to dictionary
+    N['time'] = pro_time
+
+    return N, header_mid
+
 def calc_bin_parameters_dmps(dNdlogD):
 
     """
@@ -239,7 +286,7 @@ def calc_bin_parameters_dmps(dNdlogD):
 
     return D, dD, logD, dlogD
 
-def calc_bin_parameters_aps(N, units='nm'):
+def calc_bin_parameters_aps(aps_N, units='nm'):
 
     """
     Calculate bin parameters for the aps data
@@ -247,10 +294,11 @@ def calc_bin_parameters_aps(N, units='nm'):
     :return:
     """
 
-    D_keys = N.keys()
-    del D_keys[D_keys.index('time')]  # remove time so we just get bin widths
-    del D_keys[D_keys.index('rawtime')]
-    del D_keys[D_keys.index('Total')]  # remove time so we just get bin widths
+    D_keys = aps_N.keys()
+    for key in ['time', 'rawtime', 'Total']:
+        if key in D_keys:
+            del D_keys[D_keys.index(key)]
+
     D_min = deepcopy(D_keys)
     D_min = np.array(D_min, dtype=float)
     D_min = np.sort(D_min) * 1e3
@@ -800,7 +848,6 @@ def calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D
         Dg[t] = np.prod(x3) ** (1.0/np.sum(y3))
 
 
-
     return Dv, Dn
 
 def calc_geometric_mean_and_stdev_radius(size_range_idx, dNdD, dNdlogD, dlogD, D, units='nm'):
@@ -1119,13 +1166,15 @@ def quick_plot_dN(N_hourly, N_hourly_50, dNdlogD, savestr, savedir):
 
     return
 
-def quick_plot_stdev_g_r(dNdlogD, D_min, D_max):
+def quick_plot_stdev_g_r(dNdlogD, D_min, D_max, site_meta, savestr):
 
     """
     Quick plot of the geometric standard deviation
     :param dNdlogD:
     :param D_min:
     :param D_max:
+    :param site_meta:
+    :param savestr: string with site name short and number distribution instrments used
     :return:
     """
 
@@ -1135,16 +1184,16 @@ def quick_plot_stdev_g_r(dNdlogD, D_min, D_max):
 
     plt.hist(dataset, bins=20)
     date_range_str = dNdlogD['time'][0].strftime('%Y/%m/%d') + ' - ' + dNdlogD['time'][-1].strftime('%Y/%m/%d')
-    accum_range_radii_str = str(D_min/2.0) + '-' + str(D_max/2.0) + 'nm'
-    plt.suptitle(site_ins['site_long'] + '; '+date_range_str + ';\n radii range: ' + accum_range_radii_str + '; mean: ' + str(stdev_g_r_mean))
+    size_range_radii_str = str(D_min/2.0) + '-' + str(D_max/2.0) + 'nm'
+    plt.suptitle(site_meta['site_long'] + '; '+date_range_str + ';\n radii range: ' + size_range_radii_str + '; mean: ' + str(stdev_g_r_mean))
     plt.ylabel('frequency')
     plt.xlabel('geometric standard deviation')
-    plt.savefig(savedir + 'geometric_stdev_mean/' + 'geo_stdev_r_'+site_ins['site_short'] + '_' + accum_range_radii_str +'.png')
+    plt.savefig(savedir + 'geometric_stdev_mean/' + 'geo_stdev_r_'+ savestr + '_' + size_range_radii_str +'.png')
     plt.close()
 
     return
 
-def quick_plot_r_g(dNdlogD, D_min, D_max):
+def quick_plot_r_g(dNdlogD, D_min, D_max, site_meta, savestr):
 
     """
     Quick plot the geometric mean radius
@@ -1161,11 +1210,11 @@ def quick_plot_r_g(dNdlogD, D_min, D_max):
 
     plt.hist(dataset, bins=20)
     date_range_str = dNdlogD['time'][0].strftime('%Y/%m/%d') + ' - ' + dNdlogD['time'][-1].strftime('%Y/%m/%d')
-    accum_range_radii_str = str(D_min/2.0) + '-' + str(D_max/2.0) + 'nm'
-    plt.suptitle(site_ins['site_long'] + '; '+date_range_str + ';\n radii range: ' + accum_range_radii_str + '; mean: ' + str(r_g_mean))
+    size_range_radii_str = str(D_min/2.0) + '-' + str(D_max/2.0) + 'nm'
+    plt.suptitle(site_meta['site_long'] + '; '+date_range_str + ';\n radii range: ' + size_range_radii_str + '; mean: ' + str(r_g_mean))
     plt.ylabel('frequency')
     plt.xlabel('geometric mean radius [nm]')
-    plt.savefig(savedir + 'geometric_stdev_mean/' + 'geo_mean_r_'+site_ins['site_short'] + '_' + accum_range_radii_str +'.png')
+    plt.savefig(savedir + 'geometric_stdev_mean/' + 'geo_mean_r_' + savestr + '_' + size_range_radii_str +'.png')
     plt.close()
 
     return
@@ -1187,15 +1236,22 @@ if __name__ == '__main__':
     rhdatadir = maindir + 'data/L1/'
     pickledir = maindir + 'data/pickle/'
 
-    # year for data
-    year = 2016
+    # year of data - old
+    # year = 2016
 
     # site and instruments
-    # period: 'routine' if the obs are routinely taken
-    # site_ins = {'site_short':'NK', 'site_long': 'North_Kensington', 'period': 'ClearfLo',
+    # period: 'routine' if the obs are routinely taken; 'long_term' if a long period is present; 'ClearfLo' if clearflo.
+    # site_meta = {'site_short':'NK', 'site_long': 'North_Kensington', 'period': 'ClearfLo',
     #           'DMPS': True, 'APS': True, 'SMPS': False, 'GRIMM': False}
-    site_ins = {'site_short':'Ch', 'site_long': 'Chilbolton', 'period': 'routine',
-                'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': True}
+
+    # long term SMPS only
+    site_meta = {'site_short':'NK', 'site_long': 'North_Kensington', 'period': 'long_term'}
+    site_ins = {'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': False}
+
+    # site_meta = {'site_short':'Ch', 'site_long': 'Chilbolton', 'period': 'routine',
+    #             'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': True}
+
+
 
     # RH data for ClearfLo
     site_rh = {'WXT_KSK': np.nan}
@@ -1205,13 +1261,13 @@ if __name__ == '__main__':
     timeRes = 60
 
     # save string
-    savestr = site_ins['site_short'] + '_SMPS_GRIMM'
+    savestr = site_meta['site_short'] + ''.join(['_'+i if site_ins[i] == True else '' for i in site_ins.iterkeys()])
 
     # ==============================================================================
     # Read data
     # ==============================================================================
 
-    if site_ins['period'] == 'ClearfLo':
+    if site_meta['period'] == 'ClearfLo':
         # read in RH data
         # get all RH filenames and store them in a list
         # add rain rate [RR] to those extracted
@@ -1223,72 +1279,123 @@ if __name__ == '__main__':
         RH['RR'][RH['RR'] == -999] = np.nan  # remove bad data with nans
 
 
-    # read in number distribution from observed data ---------------------------
+    # Read in number distribution from observed data ---------------------------
     ## DMPS
     if site_ins['DMPS'] == True:
 
-        # read in N data and extract relevent values
-        # make N at all heights away from surface nan to be safe
-        filepath = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/ClearfLo/' \
-                   'man-dmps_n-kensington_20120114_r0.na'
+        if site_meta['period'] == 'ClearfLo':
 
-        # read in the ClearfLo data
-        dmps_dNdlogD, dmps_header_bins = read_dmps(filepath)
+            # read in N data and extract relevent values
+            # make N at all heights away from surface nan to be safe
+            filepath = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/ClearfLo/' \
+                       'man-dmps_n-kensington_20120114_r0.na'
 
-        # remove the overlapping bins in both data and the headers!
-        # VERY specific for the DMPS
-        if filepath == 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/ClearfLo/' \
-                   'man-dmps_n-kensington_20120114_r0.na':
-            for overlap_bin_i in ['22.7801', '25.2956', '28.0728']:
+            # read in the ClearfLo data
+            dmps_dNdlogD, dmps_header_bins = read_dmps(filepath)
 
-                del dmps_dNdlogD[overlap_bin_i]
+            # remove the overlapping bins in both data and the headers!
+            # VERY specific for the DMPS
+            if filepath == 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/ClearfLo/' \
+                       'man-dmps_n-kensington_20120114_r0.na':
+                for overlap_bin_i in ['22.7801', '25.2956', '28.0728']:
 
-                idx = np.where(dmps_header_bins == overlap_bin_i)
-                dmps_header_bins = np.delete(dmps_header_bins, idx)
-        else:
-            raise ValueError('Script is designed for DMPS data read in - edit script before continuing!')
+                    del dmps_dNdlogD[overlap_bin_i]
 
-        # calculate bin centres and ranges for the dmps (D_mid)
-        dmps_D, dmps_dD, dmps_logD, dmps_dlogD = calc_bin_parameters_dmps(dmps_dNdlogD)
+                    idx = np.where(dmps_header_bins == overlap_bin_i)
+                    dmps_header_bins = np.delete(dmps_header_bins, idx)
+            else:
+                raise ValueError('Script is designed for DMPS data read in - edit script before continuing!')
 
-        # # check mid, widths start and ends are ok
-        # for i in range(len(widths_end)):
-        #     print str(widths_start[i]) + ' to ' + str(widths_end[i]) + ': mid = ' + str(D_mid[i]) + '; width = ' + str(widths[i])
+            # calculate bin centres and ranges for the dmps (D_mid)
+            dmps_D, dmps_dD, dmps_logD, dmps_dlogD = calc_bin_parameters_dmps(dmps_dNdlogD)
+
+            # # check mid, widths start and ends are ok
+            # for i in range(len(widths_end)):
+            #     print str(widths_start[i]) + ' to ' + str(widths_end[i]) + ': mid = ' + str(D_mid[i]) + '; width = ' + str(widths[i])
 
     # -----------------------------------------------------------------------
     ## APS
     if site_ins['APS'] == True:
 
-        # Read in aps data (larger radii: 0.5 to 20 microns)
-        filepath_aps = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/ClearfLo/' \
-                       'man-aps_n-kensington_20120110_r0.na'
+        if site_meta['period'] == 'ClearfLo':
 
-        # read in aps data (dictionary format)
-        # header bins will be lower bound of the bin, not the bin mid! (header_bins != aps_D)
-        aps_N, aps_header_bins = read_aps(filepath_aps)
+            # Read in aps data (larger radii: 0.5 to 20 microns)
+            filepath_aps = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/ClearfLo/' \
+                           'man-aps_n-kensington_20120110_r0.na'
+
+            # read in aps data (dictionary format)
+            # header bins will be lower bound of the bin, not the bin mid! (header_bins != aps_D)
+            aps_N, aps_header_bins = read_clearflo_aps(filepath_aps)
+
+
+        if (site_meta['period'] == 'routine') & (site_meta['site_short'] == 'NK'):
+
+            # main data [# cm-3]
+            filepath_aps = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/ERG/' \
+                           'APS data NK 2014-2017.csv'
+
+            # read in the data
+            aps_N, aps_header_bins = read_routine_aps(filepath_aps)
 
         # calculate bin parameters
-        # for the DMPS, the headers correspond to the min bin edge. Therefore, the header along is the bin max.
+        # The headers correspond to the min bin edge. Therefore, the header along is the bin max.
         aps_D, aps_dD, aps_logD, aps_dlogD = calc_bin_parameters_aps(aps_N, units='nm')
 
         # calc dNdlogD from N, for aps data (coarse)
         aps_dNdlogD = calc_dNdlogD_from_N_aps(aps_N, aps_D, aps_dlogD, aps_header_bins)
-
     # -----------------------------------------------------------------------
     ## SMPS
     if site_ins['SMPS'] == True:
 
-        # Read in SMPS data (assuming all SMPS files share the same sort of format)
-        filepath_SMPS = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/NPL/' \
-                       'SMPS_Size_'+site_ins['site_long']+'_Annual_Ratified_2016_v01.xls'
+        if site_meta['period'] == 'routine':
 
-        data_frame = pandas.read_excel(filepath_SMPS, 'Data')
+            # Read in SMPS data (assuming all SMPS files share the same sort of format)
+            filepath_SMPS = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/NPL/' \
+                           'SMPS_Size_'+site_meta['site_long']+'_Annual_Ratified_2016_v01.xls'
 
-        # remove the first column (date) and last 2 cols (empty col and total)
-        N_raw = np.asarray(data_frame)
-        smps_N = {'Date': np.array([i.to_datetime() for i in N_raw[:, 0]]),
-                  'binned': np.array(N_raw[:, 1:-2]),
-                  'headers': np.array(list(data_frame)[1:-2])}
+            data_frame = pandas.read_excel(filepath_SMPS, 'Data')
+
+            # remove the first column (date) and last 2 cols (empty col and total)
+            N_raw = np.asarray(data_frame)
+            smps_N = {'Date': np.array([i.to_datetime() for i in N_raw[:, 0]]),
+                      'binned': np.array(N_raw[:, 1:-2]),
+                      'headers': np.array(list(data_frame)[1:-2])}
+
+        # NK long SMPS dataset (.xls) 2007 - 2016 inclusively
+        if (site_meta['period'] == 'long_term') & (site_meta['site_short'] == 'NK'):
+
+            # Read in SMPS data (assuming all SMPS files share the same sort of format)
+            filepath_SMPS = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/ERG/' \
+                            'SMPSData_NK_2007-2016.xlsx'
+
+            # years to read in
+            years = [str(i) for i in range(2014, 2017)]
+
+            # smps_N = {'Date':np.array([]), 'binned':np.array([]), 'headers':np.array([])}
+
+            print 'NK SMPS long-term read in...'
+
+            for year in years:
+
+                print 'year = '+ year
+
+                data_frame = pandas.read_excel(filepath_SMPS, year)
+
+                N_raw = np.asarray(data_frame)
+                smps_N_year = {'Date': np.array([i.to_datetime() for i in N_raw[:, 0]]),
+                              'binned': np.array(N_raw[:, 1:-2]),
+                              'headers': np.array(list(data_frame)[1:-2])}
+
+                # store data
+                if year == years[0]:
+                    smps_N = deepcopy(smps_N_year)
+                else:
+
+                    # update smps_N with data for this year
+                    smps_N['binned'] = np.vstack((smps_N['binned'], smps_N_year['binned']))
+                    smps_N['Date'] = np.append(smps_N['Date'], smps_N_year['Date'])
+                    smps_N['headers'] = smps_N_year['headers']
+
 
         # get bin parameters
         # smps_N = calc_bin_parameters_smps_dN(smps_N, units='nm') # testing found it was incorrect!
@@ -1296,6 +1403,7 @@ if __name__ == '__main__':
 
         # calc dNdlogD from N, for aps data
         smps_dNdlogD = calc_dNdlogD_from_N_smps(smps_N)
+
 
     # -----------------------------------------------------------------------
     ## GRIMM
@@ -1310,7 +1418,9 @@ if __name__ == '__main__':
         # calc dNdlogD from N, for grimm data
         grimm_dNdlogD = calc_dNdlogD_from_N_grimm(grimm_N)
 
-    # -----------------------------------------------------------------------
+    # ==============================================================================
+    # Merge datasets
+    # ==============================================================================
     if (site_ins['SMPS'] == True) & (site_ins['GRIMM'] == True):
         # merge the dmps and APS dNdlogD datasets together...
         # set up so data resolution is the same
@@ -1323,7 +1433,8 @@ if __name__ == '__main__':
         logD = dNdlogD['logD']
 
         # extra save str for figures
-        savestr = site_ins['site_short'] + '_SMPS_GRIMM'
+        savestr = site_meta['site_short'] + '_SMPS_GRIMM'
+        
     # -----------------------------------------------------------------------
     if (site_ins['DMPS'] == True) & (site_ins['APS'] == True):
         # merge the dmps and APS dNdlogD datasets together...
@@ -1336,13 +1447,22 @@ if __name__ == '__main__':
         dD = np.append(dmps_dD, aps_dD)
         dlogD = np.append(dmps_dlogD, aps_dlogD)
 
-        # extra save str for figures
-        savestr = site_ins['site_short'] + '_DMPS_APS'
+
+    # if only SMPS is set True
+    if (site_ins['SMPS'] == True) & (np.sum(site_ins.values()) == 1):
+
+        # As time resolution is already in 15 mins, create a 'Time' entry from 'Date'
+        dNdlogD = smps_dNdlogD
+        dNdlogD['time'] = smps_N['Date']
+
+        D = smps_N['D']
+        logD = smps_N['logD']
+        dD = smps_N['dD']
+        dlogD = smps_N['dlogD']
 
     # ==============================================================================
     # Main processing of data
     # ==============================================================================
-
 
     # Set up the other aerosol distribution arrays in a similar style to dNdlogD (dictionaries with a 'binned' array)
     # ToDo keep 'sum' for now, though it originally served a prupose it is redunden, check if it might still be useful
@@ -1402,32 +1522,36 @@ if __name__ == '__main__':
 
         dN['binned'][:, i] = dNdD['binned'][:, i] * dD_i
 
-    # calculate the volume and number mean diameters for 0 - 2.5 micron range (Dv and Dn respectively)
+    # Calculate the volume and number mean diameters for 0 - 2.5 micron range (Dv and Dn respectively)
+    # Get size range
     D_min = 0.0 # use lowest value in D as the lower limit
     D_max = 2500.0 # 2.5 microns
-    dNdlogD['Dv_lt2p5'], dNdlogD['Dn_lt2p5'] = calc_volume_and_number_mean_diameter(D_min, D_max, dNdD, dNdlogD, dlogD, D)
+    size_range_idx = get_size_range_idx(D, D_min, D_max)
+
+    dNdlogD['Dv_lt2p5'], dNdlogD['Dn_lt2p5'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D)
 
     # calculate the volume and number mean diameters for the 2.5 - 10 micron (Dv and Dn respectively)
     D_min = 2500.0 # 2.5 microns
     D_max = 10000.0 # 10 microns
-    dNdlogD['Dv_2p5_10'], dNdlogD['Dn_2p5_10'] = calc_volume_and_number_mean_diameter(D_min, D_max, dNdD, dNdlogD, dlogD, D)
+    dNdlogD['Dv_2p5_10'], dNdlogD['Dn_2p5_10'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D)
 
     # calculate the volume and number mean diameters for below 10 micron (Dv and Dn respectively)
     D_min = 0.0 # 0 microns
     D_max = 10000.0 # 10 microns
-    dNdlogD['Dv_10'], dNdlogD['Dn_10'] = calc_volume_and_number_mean_diameter(D_min, D_max, dNdD, dNdlogD, dlogD, D)
+    dNdlogD['Dv_10'], dNdlogD['Dn_10'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D)
 
 
     # extract out only aerosol data based on the RH threshold and if it is less or more than it.
+    # Necessary if the measurements were taken at ambient RH and not dried before measureing
     N_hourly, met_avg = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
                                     smps_D_idx, grimm_D_idx, subsample=True, RHthresh=60.0, equate='lt', save=False)
     N_hourly_50, _ = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
                                     smps_D_idx, grimm_D_idx, subsample=True, RHthresh=50.0, equate='lt', save=False)
 
-    # # quickplot what it looks like
-    # quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir)
-    quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir, saveFile=False)
-    quick_plot_dN(N_hourly, N_hourly_50, dNdlogD, savestr, savedir)
+    # # # quickplot what it looks like
+    # # quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir)
+    # quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir, saveFile=False)
+    # quick_plot_dN(N_hourly, N_hourly_50, dNdlogD, savestr, savedir)
 
     # # calc dN/dD (n_N(Dp)) from dN/dlogD: Seinfeld and Pandis 2007 eqn 8.18
     # first extract and store the value for the current t, from each bin
@@ -1466,12 +1590,11 @@ if __name__ == '__main__':
     dNdlogD['r_g'], dNdlogD['stdev_g_r'] = calc_geometric_mean_and_stdev_radius(accum_range_idx, dNdD, dNdlogD, dlogD, D, units='nm')
 
     # statistics and plots on r_g and stdev_g_r
-    quick_plot_r_g(dNdlogD, D_min, D_max)
-    quick_plot_stdev_g_r(dNdlogD, D_min, D_max)
+    quick_plot_r_g(dNdlogD, D_min, D_max, site_meta, savestr)
+    quick_plot_stdev_g_r(dNdlogD, D_min, D_max, site_meta, savestr)
 
-    # plot histogram of r_g
-    dataset = dNdlogD['r_g'][~np.isnan(dNdlogD['r_g'])]
-    plt.hist(dataset)
+    # np.nanmean(dNdlogD['r_g'])
+    # np.nanmean(dNdlogD['stdev_g_r'])
 
     plt.scatter(dNdlogD['r_g'][~np.isnan(dNdlogD['r_g'])], dNdlogD['stdev_g_r'][~np.isnan(dNdlogD['stdev_g_r'])])
 
