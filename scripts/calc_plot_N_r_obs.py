@@ -223,7 +223,7 @@ def read_routine_aps(filepath_aps):
 
     # read main data
     N_raw = np.genfromtxt(filepath_aps, delimiter=',', dtype='|S20')
-    pro_time = np.array([dt.datetime.strptime(i, '%d-%m-%y %H:%M') for i in aps_N[1:, 0]])
+    pro_time = np.array([dt.datetime.strptime(i, '%d-%m-%y %H:%M') for i in N_raw[1:, 0]])
 
     # get headers and idx for just the particle size data - ignore the first column as it is <0.523
     raw_headers = np.array([i.split('@')[0] for i in N_raw[0]])
@@ -237,23 +237,33 @@ def read_routine_aps(filepath_aps):
     header_defs_array = np.asarray(header_defs)
     header_split = np.array([i[1].split(' ') for i in header_defs_array])
     header_orig = np.array([str(i[0]) for i in header_defs_array])
-    header_mid = np.array([str(i[3]) for i in header_split])
+    # header_mid = np.array([str(i[3]) for i in header_split])
+    header_mid = np.array([float(i[3]) for i in header_split])
+
+    # convert header units from microns to nanometres
+    header_mid *= 1.0e3
 
     # if the headers line up
     if header_orig[0] == raw_headers_particles[0]:
 
-        # turn raw into a dictionary
-        N = {}
-        for i, head in zip(particle_idx[0], header_mid):
-            N[head] = np.array([np.nan if j == '' else j for j in N_raw[1:, i]], dtype=float)
+        # Turn N data into a numpy array with float values and np.nan where originally it was ''
+        # There are diagnostic variables in the later columns that we don't want to extract.
+        #     Also, we skip the first header, as it is not a well defined bin (less than and not a bin centre),
+        #     hence N_raw[1:, 2:len(header_mid)+2].
+
+        replace_idx = np.where(N_raw == '')
+        N_raw[replace_idx] = np.nan
+        N_processed = np.array(N_raw[1:, 2:len(header_mid)+2], dtype=float)
+
+        # create N
+        N = {'binned': N_processed,
+             'time': pro_time,
+             'headers': header_mid}
 
     else:
         raise ValueError('Headers do not allign between APS data and APS definitions!')
 
-    # add time to dictionary
-    N['time'] = pro_time
-
-    return N, header_mid
+    return N
 
 def calc_bin_parameters_dmps(dNdlogD):
 
@@ -286,7 +296,7 @@ def calc_bin_parameters_dmps(dNdlogD):
 
     return D, dD, logD, dlogD
 
-def calc_bin_parameters_aps(aps_N, units='nm'):
+def calc_bin_parameters_aps_clearflo(aps_N, units='nm'):
 
     """
     Calculate bin parameters for the aps data
@@ -488,6 +498,53 @@ def calc_bin_parameters_grimm(N, units='nm'):
 
     return N
 
+def calc_bin_parameters_general(N, units='nm'):
+
+    """
+    Calculate bin parameters for the data
+    headers are floats within a list, unlike aps which were keys within a dictionary
+    :param N:
+    :return:
+    """
+
+    # header is the mid bin D
+    D = N['headers']
+
+    # bin max -> the bin + half way to the next bin
+    D_diffs = D[1:] - D[:-1] # checked
+    D_max = D[:-1] + (D_diffs / 2.0) # checked
+
+    # upper edge difference for the last bin is assumed be equal to the upper edge difference of the second to last bin
+    #   therefore add the upper edge difference of the second to last bin, to the last bin.
+    D_max = np.append(D_max, D[-1] + (D_diffs[-1]/2.0)) # checked
+    # lower edge difference for the first bin is assumed to be equal to the lower edge difference of the second bin,
+    #   therefore subtract the lower edge difference of the second bin, from the first bin.
+    # lower edge of subsequent bins = upper edge of the previous bin, hence using D_max[:-1]
+    D_min = np.append(D[0] - (D_diffs[0]/2.0), D_max[:-1]) # checked
+
+    # bin parameters
+    logD = np.log10(D)
+
+    # bin widths
+    dD = D_max - D_min
+    dlogD = np.log10(D_max) - np.log10(D_min)
+
+    # # convert from microns to nm
+    # didn't work for the dlogD one...
+    # if units == 'nm':
+    #
+    #     D *= 1e3
+    #     dD *= 1e3
+    #     logD *= 1e3
+    #     dlogD *= 1e3
+
+    N['D'] = D
+    N['dD'] = dD
+    N['logD'] = logD
+    N['dlogD'] = dlogD
+
+    return N
+
 # conversions / merging
 
 def calc_dNdlogD_from_N_aps(aps_N, aps_D, aps_dlogD, aps_header_bins):
@@ -521,7 +578,7 @@ def calc_dNdlogD_from_N_smps(smps_N):
     :return: dNdlogD
     """
 
-    smps_dNdlogD = {'time': smps_N['Date'],
+    smps_dNdlogD = {'time': smps_N['time'],
                     'D': smps_N['D'],
                     'dD': smps_N['dD'],
                     'dlogD': smps_N['dlogD'],
@@ -601,6 +658,27 @@ def calc_dNdlogD_from_N_grimm(grimm_N):
 
     return grimm_dNdlogD
 
+def calc_dNdlogD_from_N_general(N):
+
+    """
+    Calculate dNdlogD from the basic N data, for the smps instrument
+    :param smps_N:
+    :return: dNdlogD
+    """
+
+    dNdlogD = {'time': N['time'],
+                    'D': N['D'],
+                    'dD': N['dD'],
+                    'dlogD': N['dlogD'],
+                    'logD': N['logD'],
+                    'binned': np.empty(N['binned'].shape)}
+    dNdlogD['binned'][:] = np.nan
+
+    for D_idx, dlogD_i in enumerate(N['dlogD']):
+        dNdlogD['binned'][:, D_idx] = N['binned'][:, D_idx] / dlogD_i
+
+    return dNdlogD
+
 def merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D, timeRes=60):
 
     """
@@ -668,7 +746,7 @@ def merge_dmps_aps_dNdlogD(dmps_dNdlogD, dmps_D, aps_dNdlogD, aps_D, timeRes=60)
 def merge_smps_grimm_dNdlogD(smps_dNdlogD, grimm_dNdlogD, timeRes=60):
 
     """
-    Merge the dmps and aps dNdlogD datasets together, such a a 2D array called 'binned' is in the new dNdlogD array
+    Merge the smps and grimm dNdlogD datasets together, such a a 2D array called 'binned' is in the new dNdlogD array
     :param smps_dNdlogD:
     :param grimm_dNdlogD:
     :param timeRes: time resolution of output data in minutes
@@ -765,6 +843,110 @@ def merge_smps_grimm_dNdlogD(smps_dNdlogD, grimm_dNdlogD, timeRes=60):
     grimm_D_idx = np.arange(smps_D_idx[-1] + 1, len(dNdlogD['D']))
 
     return dNdlogD, grimm_dNdlogD, smps_D_idx, grimm_D_idx
+
+def merge_small_large_dNdlogD(small_dNdlogD, large_dNdlogD, timeRes=60):
+
+    """
+    Merge the small and large dNdlogD datasets together, such a a 2D array called 'binned' is in the new dNdlogD array
+    :param small_dNdlogD:
+    :param large_dNdlogD:
+    :param timeRes: time resolution of output data in minutes
+    :return:
+
+    generalised so it could take 2 different instruments. Searches a subsample of the time array, based on what times
+    have been used in previous iterations of t. Otherwise the code takes ages to run!
+    NOTE: ASSUMES data is sorted in time order (data is ok to have missing times in it)
+    """
+
+    # time range - make sure mins = 0
+    start_time = np.max([small_dNdlogD['time'][0], large_dNdlogD['time'][0]])
+    end_time = np.min([small_dNdlogD['time'][-1], large_dNdlogD['time'][-1]])
+    start_time -= dt.timedelta(minutes=start_time.minute)
+    end_time -= dt.timedelta(minutes=end_time.minute)
+
+    # original
+    # start_time = np.min([small_dNdlogD['time'][0], large_dNdlogD['time'][0]])
+    # end_time = np.max([small_dNdlogD['time'][-1], large_dNdlogD['time'][-1]])
+    time_range = eu.date_range(start_time, end_time, timeRes, 'minutes')
+
+    # trim the grimm data that overlaps with the dmps (as smps has higher D binning resolution)
+    # find which bins DO NOT overlap, and keep those.
+    large_idx = np.where(large_dNdlogD['D'] >= small_dNdlogD['D'][-1])[0]
+
+    # trim
+    large_dNdlogD['D'] = large_dNdlogD['D'][large_idx]
+    large_dNdlogD['dD'] = large_dNdlogD['dD'][large_idx]
+    large_dNdlogD['dlogD'] = large_dNdlogD['dlogD'][large_idx]
+    large_dNdlogD['logD'] = large_dNdlogD['logD'][large_idx]
+    large_dNdlogD['binned'] = large_dNdlogD['binned'][:, large_idx]
+
+
+    # binned shape = [time, bin]
+    dNdlogD = {'time': time_range,
+               'binned': np.empty([len(time_range), len(small_dNdlogD['D']) + len(large_dNdlogD['D'])])}
+    dNdlogD['binned'][:] = np.nan
+
+    small_skip_idx = 0
+    large_skip_idx = 0
+
+    # insert the smps data first, take average of all data within the time period
+    for t in range(len(time_range)):
+
+        ## 1. SMPS
+
+        # find data for this time
+        # currently set subsample to be arbitrarily 200 elements above the previous sampled element's idx.
+        small_binary = np.logical_and(small_dNdlogD['time'][small_skip_idx:small_skip_idx+200] > time_range[t],
+                                     small_dNdlogD['time'][small_skip_idx:small_skip_idx+200] <= time_range[t] + dt.timedelta(minutes=timeRes))
+
+        # get idx location of the current subsample (small_skip_idx:small_skip_idx+200) and add on how many idx elements
+        #   have been skipped so far (small_skip_idx), such that small_idx = location of elements in the time period
+        #   within the entire array [:]
+        small_idx = np.where(small_binary == True)[0] + small_skip_idx
+
+        for D_idx in range(len(small_dNdlogD['D'])):  # smaller data fill the first columns
+
+            # create mean of all data within the time period and store
+            dNdlogD['binned'][t, D_idx] = np.nanmean(small_dNdlogD['binned'][small_idx, D_idx])
+
+        # change skip idx to miss data already used in averaging
+        #   so the entire time array doesn't need to be searched through for each iteration of t
+        if small_idx.size != 0:
+            small_skip_idx = small_idx[-1] + 1
+
+        # -------------
+
+        ## 2. GRIMM
+
+        # find data for this time
+        large_binary = np.logical_and(large_dNdlogD['time'][large_skip_idx:large_skip_idx+200] >= time_range[t],
+                                      large_dNdlogD['time'][large_skip_idx:large_skip_idx+200] < time_range[t] + dt.timedelta(minutes=timeRes))
+        # idx = np.where(binary == True)[0]
+
+        large_idx = np.where(large_binary == True)[0] + large_skip_idx
+
+        for D_idx in range(len(large_dNdlogD['D'])):  # smaller data fill the first columns
+
+            # idx in new dNlogD array (data will go after the smps data)
+            D_binned_idx = D_idx + len(small_dNdlogD['D'])
+
+            # create mean of all data within the time period and store
+            # dNdlogD['binned'][t, D_binned_idx] = np.nanmean(large_dNdlogD['binned'][large_binary, D_idx])
+            dNdlogD['binned'][t, D_binned_idx] = np.nanmean(large_dNdlogD['binned'][large_idx, D_idx])
+
+        # change skip idx to miss data already used in averaging
+        if large_idx.size != 0:
+            large_skip_idx = large_idx[-1] + 1
+
+    # merge the dimaeter bins together too
+    for param in ['D', 'dD', 'dlogD', 'logD']:
+        dNdlogD[param] = np.append(small_dNdlogD[param], large_dNdlogD[param])
+
+    # keep the index position of the original instruments D, within the combined D range
+    small_D_idx = np.arange(len(small_dNdlogD['D']))
+    large_D_idx = np.arange(small_D_idx[-1] + 1, len(dNdlogD['D']))
+
+    return dNdlogD, large_dNdlogD, small_D_idx, large_D_idx
 
 # processing / calculations
 
@@ -960,20 +1142,26 @@ def calc_geometric_mean_and_stdev_radius(size_range_idx, dNdD, dNdlogD, dlogD, D
     return r_g, stdev_g_r
 
 def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr, smps_D_idx, grimm_D_idx,
-                                         subsample=True, RHthresh=60.0, equate='lt', save=True):
+                                         subsample=True, RHthresh=60.0, equate='lt', save=True, extra=''):
 
     """
     Create hourly version of the aerosol data for saving. Also only take data based on an RH threshold
     :param dN:
     :param dVdlogD:
     :param dNdlogD:
-    :param met_vars: includes RH [%]; Tair [K]; pressure [Pa]
+    :param met_vars:
     :param D:
     :param dD:
     :param pickledir:
+    :param savestr:
+    :param smps_D_idx:
+    :param grimm_D_idx:
+    :param subsample:
     :param RHthresh:
     :param equate:
-    :return: N_hourly [dict]
+    :param save [bool]: Turn saving on/off
+    :param extra: extra string to change the savename
+    :return:
     """
 
     # create hourly WXT and dN data
@@ -993,13 +1181,13 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
 
 
     # set up empty arrays for met data tp fill
-    for met_key in ['RH', 'RH_frac', 'Tair', 'pressure']:
+    for met_key in ['RH', 'RH_frac', 'Tair', 'press']:
         N_hourly[met_key] = np.empty(len(dN['time']))
         N_hourly[met_key][:] = np.nan
 
     # keep average of met variables in a separate dictionary for later diagnostics
     met_vars_avg = {}
-    for var in ['RH', 'RH_frac', 'Tair', 'pressure']:
+    for var in ['RH', 'RH_frac', 'Tair', 'press']:
         met_vars_avg[var] = np.empty(len(dN['time']))
         met_vars_avg[var][:] = np.nan
 
@@ -1011,7 +1199,7 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
 
         met_idx = np.where(bool == True)[0] + met_skip_idx
 
-        for var in ['RH', 'RH_frac','Tair', 'pressure']:
+        for var in ['RH', 'RH_frac','Tair', 'press']:
 
             # average of variable for this time period, t
             var_i = np.nanmean(met_vars[var][met_idx])
@@ -1068,8 +1256,10 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
         # save the data
         # savestr will have the site name and instruments used in it
         # NOTE! DO NOT USE protocol=HIGHEST..., loading from python in linux does not work for some uknown reason...
-        with open(pickledir + 'N_hourly_'+savestr+subsamplestr+'.pickle', 'wb') as handle:
+        with open(pickledir + 'N_hourly_'+savestr+subsamplestr+'_'+extra+'.pickle', 'wb') as handle:
             pickle.dump(N_hourly, handle)
+
+        print 'N_hourly_'+savestr+subsamplestr+'_'+extra+'.pickle'+'saved!'
 
     return N_hourly, met_vars
 
@@ -1229,6 +1419,7 @@ if __name__ == '__main__':
     # directories
     maindir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/'
     datadir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/'
+    wxtdir = maindir + 'data/L1/'
 
     savedir = maindir + 'figures/number_concentration/'
 
@@ -1237,25 +1428,24 @@ if __name__ == '__main__':
     pickledir = maindir + 'data/pickle/'
 
     # year of data - old
-    # year = 2016
+    years = ['2016']
 
     # site and instruments
     # period: 'routine' if the obs are routinely taken; 'long_term' if a long period is present; 'ClearfLo' if clearflo.
     # site_meta = {'site_short':'NK', 'site_long': 'North_Kensington', 'period': 'ClearfLo',
     #           'DMPS': True, 'APS': True, 'SMPS': False, 'GRIMM': False}
 
-    # long term SMPS only
+    # # NK: long term SMPS only
+    # site_meta = {'site_short':'NK', 'site_long': 'North_Kensington', 'period': 'long_term'}
+    # site_ins = {'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': False}
+
+    # NK: SMPS and APS
     site_meta = {'site_short':'NK', 'site_long': 'North_Kensington', 'period': 'long_term'}
-    site_ins = {'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': False}
+    site_ins = {'DMPS': False, 'APS': True, 'SMPS': True, 'GRIMM': False}
 
     # site_meta = {'site_short':'Ch', 'site_long': 'Chilbolton', 'period': 'routine',
     #             'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': True}
 
-
-
-    # RH data for ClearfLo
-    site_rh = {'WXT_KSK': np.nan}
-    rh_inst_site = site_rh.keys()[0]
 
     # time resolution of output data in minutes
     timeRes = 60
@@ -1264,10 +1454,14 @@ if __name__ == '__main__':
     savestr = site_meta['site_short'] + ''.join(['_'+i if site_ins[i] == True else '' for i in site_ins.iterkeys()])
 
     # ==============================================================================
-    # Read data
+    # Read met data
     # ==============================================================================
 
     if site_meta['period'] == 'ClearfLo':
+        # RH data for ClearfLo
+        site_rh = {'WXT_KSK': np.nan}
+        rh_inst_site = site_rh.keys()[0]
+
         # read in RH data
         # get all RH filenames and store them in a list
         # add rain rate [RR] to those extracted
@@ -1278,8 +1472,28 @@ if __name__ == '__main__':
         RH['RH'][RH['RH'] == -999] = np.nan # remove bad data with nans
         RH['RR'][RH['RR'] == -999] = np.nan  # remove bad data with nans
 
+    if (site_meta['site_long'] == 'North_Kensington') & (site_meta['period'] == 'long_term'):
 
-    # Read in number distribution from observed data ---------------------------
+        # # one year
+        # year = years[0] # read in just one years worth of data. Can always create a list of years if more is needed.
+        # wxt_filepath = wxtdir + 'WXT_KSSW_'+year+'_15min.nc'
+        # met_vars = eu.netCDF_read(wxt_filepath, vars=['RH', 'press', 'Tair', 'time'])
+        # met_vars['RH_frac'] = met_vars['RH'] * 0.01
+
+        # 2014 - 2016 inc.
+        wxt_filepaths = [wxtdir + 'WXT_KSSW_'+year+'_15min.nc' for year in ['2014', '2015', '2016']]
+        met_vars = eu.netCDF_read(wxt_filepaths, vars=['RH', 'press', 'Tair', 'time'])
+        met_vars['RH_frac'] = met_vars['RH'] * 0.01
+
+
+    # ==============================================================================
+    # Read in number distribution data
+    # ==============================================================================
+
+    # ------------------------------------------
+    # Smaller size ranges
+    # ------------------------------------------
+
     ## DMPS
     if site_ins['DMPS'] == True:
 
@@ -1294,7 +1508,7 @@ if __name__ == '__main__':
             dmps_dNdlogD, dmps_header_bins = read_dmps(filepath)
 
             # remove the overlapping bins in both data and the headers!
-            # VERY specific for the DMPS
+            # VERY specific for the DMPS when combining with APS data from ClearfLo
             if filepath == 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/ClearfLo/' \
                        'man-dmps_n-kensington_20120114_r0.na':
                 for overlap_bin_i in ['22.7801', '25.2956', '28.0728']:
@@ -1313,36 +1527,6 @@ if __name__ == '__main__':
             # for i in range(len(widths_end)):
             #     print str(widths_start[i]) + ' to ' + str(widths_end[i]) + ': mid = ' + str(D_mid[i]) + '; width = ' + str(widths[i])
 
-    # -----------------------------------------------------------------------
-    ## APS
-    if site_ins['APS'] == True:
-
-        if site_meta['period'] == 'ClearfLo':
-
-            # Read in aps data (larger radii: 0.5 to 20 microns)
-            filepath_aps = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/ClearfLo/' \
-                           'man-aps_n-kensington_20120110_r0.na'
-
-            # read in aps data (dictionary format)
-            # header bins will be lower bound of the bin, not the bin mid! (header_bins != aps_D)
-            aps_N, aps_header_bins = read_clearflo_aps(filepath_aps)
-
-
-        if (site_meta['period'] == 'routine') & (site_meta['site_short'] == 'NK'):
-
-            # main data [# cm-3]
-            filepath_aps = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/ERG/' \
-                           'APS data NK 2014-2017.csv'
-
-            # read in the data
-            aps_N, aps_header_bins = read_routine_aps(filepath_aps)
-
-        # calculate bin parameters
-        # The headers correspond to the min bin edge. Therefore, the header along is the bin max.
-        aps_D, aps_dD, aps_logD, aps_dlogD = calc_bin_parameters_aps(aps_N, units='nm')
-
-        # calc dNdlogD from N, for aps data (coarse)
-        aps_dNdlogD = calc_dNdlogD_from_N_aps(aps_N, aps_D, aps_dlogD, aps_header_bins)
     # -----------------------------------------------------------------------
     ## SMPS
     if site_ins['SMPS'] == True:
@@ -1371,8 +1555,6 @@ if __name__ == '__main__':
             # years to read in
             years = [str(i) for i in range(2014, 2017)]
 
-            # smps_N = {'Date':np.array([]), 'binned':np.array([]), 'headers':np.array([])}
-
             print 'NK SMPS long-term read in...'
 
             for year in years:
@@ -1382,7 +1564,7 @@ if __name__ == '__main__':
                 data_frame = pandas.read_excel(filepath_SMPS, year)
 
                 N_raw = np.asarray(data_frame)
-                smps_N_year = {'Date': np.array([i.to_datetime() for i in N_raw[:, 0]]),
+                smps_N_year = {'time': np.array([i.to_datetime() for i in N_raw[:, 0]]),
                               'binned': np.array(N_raw[:, 1:-2]),
                               'headers': np.array(list(data_frame)[1:-2])}
 
@@ -1393,16 +1575,59 @@ if __name__ == '__main__':
 
                     # update smps_N with data for this year
                     smps_N['binned'] = np.vstack((smps_N['binned'], smps_N_year['binned']))
-                    smps_N['Date'] = np.append(smps_N['Date'], smps_N_year['Date'])
+                    smps_N['time'] = np.append(smps_N['time'], smps_N_year['time'])
                     smps_N['headers'] = smps_N_year['headers']
 
 
         # get bin parameters
-        # smps_N = calc_bin_parameters_smps_dN(smps_N, units='nm') # testing found it was incorrect!
         smps_N = calc_bin_parameters_smps(smps_N, units='nm')
 
         # calc dNdlogD from N, for aps data
         smps_dNdlogD = calc_dNdlogD_from_N_smps(smps_N)
+
+    # ------------------------------------------
+    # Larger size ranges
+    # ------------------------------------------
+
+    ## APS
+    if site_ins['APS'] == True:
+
+        if site_meta['period'] == 'ClearfLo':
+
+            # Read in aps data (larger radii: 0.5 to 20 microns)
+            filepath_aps = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/ClearfLo/' \
+                           'man-aps_n-kensington_20120110_r0.na'
+
+            # read in aps data (dictionary format)
+            # header bins will be lower bound of the bin, not the bin mid! (header_bins != aps_D)
+            aps_N, aps_header_bins = read_clearflo_aps(filepath_aps)
+
+            # calculate bin parameters # OLD WAY with headers being strings of the header bins e.g. '10.4', '11.8' ...
+            # The headers correspond to the min bin edge. Therefore, the header along is the bin max.
+            aps_D, aps_dD, aps_logD, aps_dlogD = calc_bin_parameters_aps_clearflo(aps_N, units='nm')
+
+            # calc dNdlogD from N, for aps data (coarse)
+            aps_dNdlogD = calc_dNdlogD_from_N_aps(aps_N, aps_D, aps_dlogD, aps_header_bins)
+
+            # calc dNdlogD from N, for aps data (coarse)
+            aps_dNdlogD = calc_dNdlogD_from_N_aps(aps_N, aps_D, aps_dlogD, aps_header_bins)
+
+
+        if (site_meta['period'] == 'long_term') & (site_meta['site_short'] == 'NK'):
+
+            # main data [# cm-3]
+            filepath_aps = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/ERG/' \
+                           'APS data NK 2014-2017.csv'
+
+            # read in the data
+            aps_N = read_routine_aps(filepath_aps)
+
+            # calculate bin parameters
+            # The headers correspond to the min bin edge. Therefore, the header along is the bin max.
+            aps_N = calc_bin_parameters_general(aps_N, units='nm')
+
+            # calc dNdlogD from N, for aps data (coarse)
+            aps_dNdlogD = calc_dNdlogD_from_N_general(aps_N)
 
 
     # -----------------------------------------------------------------------
@@ -1425,7 +1650,7 @@ if __name__ == '__main__':
         # merge the dmps and APS dNdlogD datasets together...
         # set up so data resolution is the same
         # grimm D bins gets trimmed so bring it back out
-        dNdlogD, grimm_dlogD, smps_D_idx, grimm_D_idx = merge_smps_grimm_dNdlogD(smps_dNdlogD, grimm_dNdlogD, timeRes=timeRes)
+        dNdlogD, grimm_dNlogD, smps_D_idx, grimm_D_idx = merge_smps_grimm_dNdlogD(smps_dNdlogD, grimm_dNdlogD, timeRes=timeRes)
 
         D = dNdlogD['D']
         dD = dNdlogD['dD']
@@ -1434,7 +1659,7 @@ if __name__ == '__main__':
 
         # extra save str for figures
         savestr = site_meta['site_short'] + '_SMPS_GRIMM'
-        
+
     # -----------------------------------------------------------------------
     if (site_ins['DMPS'] == True) & (site_ins['APS'] == True):
         # merge the dmps and APS dNdlogD datasets together...
@@ -1447,7 +1672,7 @@ if __name__ == '__main__':
         dD = np.append(dmps_dD, aps_dD)
         dlogD = np.append(dmps_dlogD, aps_dlogD)
 
-
+    # -----------------------------------------------------------------------
     # if only SMPS is set True
     if (site_ins['SMPS'] == True) & (np.sum(site_ins.values()) == 1):
 
@@ -1459,6 +1684,18 @@ if __name__ == '__main__':
         logD = smps_N['logD']
         dD = smps_N['dD']
         dlogD = smps_N['dlogD']
+
+    # -----------------------------------------------------------------------
+    # e.g. NK long term data 2014 - 2016 inc.
+    if (site_ins['SMPS'] == True) & (site_ins['APS'] == True):
+
+        # delete overlapping bins and merge
+        dNdlogD, aps_dNdlogD_2, small_D_idx, large_D_idx = merge_small_large_dNdlogD(smps_dNdlogD, aps_dNdlogD, timeRes=timeRes)
+
+        D = dNdlogD['D']
+        logD = dNdlogD['logD']
+        dD = dNdlogD['dD']
+        dlogD = dNdlogD['dlogD']
 
     # ==============================================================================
     # Main processing of data
@@ -1544,9 +1781,10 @@ if __name__ == '__main__':
     # extract out only aerosol data based on the RH threshold and if it is less or more than it.
     # Necessary if the measurements were taken at ambient RH and not dried before measureing
     N_hourly, met_avg = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
-                                    smps_D_idx, grimm_D_idx, subsample=True, RHthresh=60.0, equate='lt', save=False)
-    N_hourly_50, _ = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
-                                    smps_D_idx, grimm_D_idx, subsample=True, RHthresh=50.0, equate='lt', save=False)
+                                    small_D_idx, large_D_idx, subsample=False, save=True, extra='20140101-20161231')
+
+    # N_hourly_50, _ = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
+    #                                 smps_D_idx, grimm_D_idx, subsample=True, RHthresh=50.0, equate='lt', save=False)
 
     # # # quickplot what it looks like
     # # quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir)
