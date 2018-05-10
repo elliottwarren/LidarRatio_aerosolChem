@@ -23,8 +23,6 @@ import netCDF4 as nc
 
 import numpy as np
 import datetime as dt
-from scipy.stats import spearmanr
-from scipy.stats import pearsonr
 import pandas
 
 from copy import deepcopy
@@ -123,12 +121,13 @@ def read_grimm_and_met_vars(maindir, year):
 
     # Read in the GRIMM EDM data
     # 2016 data only available from months 01 - 09 inclusively
-    dirs = [maindir + 'data/Chilbolton/'+str(year)+'/' + '%02d'  % i + '/*.nc' for i in range(1, 10)]
+    grimmdays = eu.date_range(dt.datetime(int(year), 1, 1), dt.datetime(int(year), 9, 24), 1, 'days')
+    # add extra days for 2017
+    grimmdays = np.append(grimmdays, eu.date_range(dt.datetime(2017, 10, 1), dt.datetime(2017, 12, 31), 1, 'days'))
 
-    #grimmdays = eu.date_range(dt.datetime(2016, 1, 1), dt.datetime(2016, 9, 24), 1, 'days')
-    grimmdays = eu.date_range(dt.datetime(year, 1, 1), dt.datetime(year, 9, 24), 1, 'days')
-    grimmpaths = [maindir + 'data/Chilbolton/'+str(year)+'/'+day.strftime('%m')+'/' +
+    grimmpaths = [maindir + 'data/Chilbolton/'+day.strftime('%Y')+'/'+day.strftime('%m')+'/' +
                    'cfarr-grimm_chilbolton_'+day.strftime('%Y%m%d')+'.nc' for day in grimmdays]
+
 
     # get sizes of arrys, so the multiple file read in data can be reshaped properly
     test = eu.netCDF_read(grimmpaths[0], vars=['particle_diameter', 'number_concentration_of_ambient_aerosol_in_air', 'time'])
@@ -148,12 +147,19 @@ def read_grimm_and_met_vars(maindir, year):
                  (len(raw['number_concentration_of_ambient_aerosol_in_air'])/num_D_bins,
                   num_D_bins))
 
-    # QAQC GRIMM data
+    # Turn 2017 Oct - Dec into 2016 so code can make a monthly lidar ratio
+    #   NOTE: This is ONLY to get representative monthly lidar ratios for Oct - Dec and should be excluded from the main
+    #   analysis
+    bool = np.array([i.year == 2017 for i in raw['time']])
+    raw['time'][bool] = raw['time'][bool] - dt.timedelta(days=366)
+
+
+    # QAQC 1 - GRIMM data
     # remove bad data for the entire row, if any one value in the row is bad (fill value for bad data = -999)
     idx = np.where(grimm_N['binned'] < 0.0)[0] # juts the row [0]
     grimm_N['binned'][idx, :] = np.nan
 
-    # some unrealistically high values can occur in the highest bins
+    # QAQC 2 - some unrealistically high values can occur in the highest bins
     idx = np.where(grimm_N['binned'][:, -1] > 0.0001)[0] # 100 cm-3 where D = 32 microns...
     grimm_N['binned'][idx, :] = np.nan
 
@@ -167,7 +173,7 @@ def read_grimm_and_met_vars(maindir, year):
     met_vars = {'time': grimm_N['time'],
                 'RH': raw['relative_humidity'],
                 'Tair': raw['air_temperature'],
-                'pressure': raw['air_pressure'],
+                'press': raw['air_pressure'],
                 'RH_frac': raw['relative_humidity']/100.0}
 
     return grimm_N, met_vars
@@ -208,11 +214,12 @@ def read_clearflo_aps(filepath_aps):
 
     return N, header_bins
 
-def read_routine_aps(filepath_aps):
+def read_routine_aps(filepath_aps, year):
 
     """
     Read in the routinely taken APS data, given to us by ERG
     :param filepath_aps:
+    :param year: year [str] though it gets used in int() further down
     :return: N [dictionary with each header as a key]
     :return: header_mid: the headers [list of strings]
     """
@@ -224,6 +231,11 @@ def read_routine_aps(filepath_aps):
     # read main data
     N_raw = np.genfromtxt(filepath_aps, delimiter=',', dtype='|S20')
     pro_time = np.array([dt.datetime.strptime(i, '%d-%m-%y %H:%M') for i in N_raw[1:, 0]])
+
+    # find start and end of years data - bulk trim - needed to help time match later with smaller size data, which is a
+    #   yearly dataset
+    _, start, _ = eu.nearest(pro_time, dt.datetime(int(year), 1, 1))
+    _, end, _ = eu.nearest(pro_time, dt.datetime(int(year), 12, 31))
 
     # get headers and idx for just the particle size data - ignore the first column as it is <0.523
     raw_headers = np.array([i.split('@')[0] for i in N_raw[0]])
@@ -256,8 +268,8 @@ def read_routine_aps(filepath_aps):
         N_processed = np.array(N_raw[1:, 2:len(header_mid)+2], dtype=float)
 
         # create N
-        N = {'binned': N_processed,
-             'time': pro_time,
+        N = {'binned': N_processed[start:end+1, :],
+             'time': pro_time[start:end+1],
              'headers': header_mid}
 
     else:
@@ -896,8 +908,8 @@ def merge_small_large_dNdlogD(small_dNdlogD, large_dNdlogD, timeRes=60):
 
         # find data for this time
         # currently set subsample to be arbitrarily 200 elements above the previous sampled element's idx.
-        small_binary = np.logical_and(small_dNdlogD['time'][small_skip_idx:small_skip_idx+200] > time_range[t],
-                                     small_dNdlogD['time'][small_skip_idx:small_skip_idx+200] <= time_range[t] + dt.timedelta(minutes=timeRes))
+        small_binary = np.logical_and(small_dNdlogD['time'][small_skip_idx:small_skip_idx+600] > time_range[t],
+                                     small_dNdlogD['time'][small_skip_idx:small_skip_idx+600] <= time_range[t] + dt.timedelta(minutes=timeRes))
 
         # get idx location of the current subsample (small_skip_idx:small_skip_idx+200) and add on how many idx elements
         #   have been skipped so far (small_skip_idx), such that small_idx = location of elements in the time period
@@ -919,8 +931,8 @@ def merge_small_large_dNdlogD(small_dNdlogD, large_dNdlogD, timeRes=60):
         ## 2. GRIMM
 
         # find data for this time
-        large_binary = np.logical_and(large_dNdlogD['time'][large_skip_idx:large_skip_idx+200] >= time_range[t],
-                                      large_dNdlogD['time'][large_skip_idx:large_skip_idx+200] < time_range[t] + dt.timedelta(minutes=timeRes))
+        large_binary = np.logical_and(large_dNdlogD['time'][large_skip_idx:large_skip_idx+600] >= time_range[t],
+                                      large_dNdlogD['time'][large_skip_idx:large_skip_idx+600] < time_range[t] + dt.timedelta(minutes=timeRes))
         # idx = np.where(binary == True)[0]
 
         large_idx = np.where(large_binary == True)[0] + large_skip_idx
@@ -1141,7 +1153,10 @@ def calc_geometric_mean_and_stdev_radius(size_range_idx, dNdD, dNdlogD, dlogD, D
 
     return r_g, stdev_g_r
 
-def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr, smps_D_idx, grimm_D_idx,
+# dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
+#                                     small_D_idx, large_D_idx, subsample=False, save=True, extra=year
+
+def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr, small_D_idx, large_D_idx,
                                          subsample=True, RHthresh=60.0, equate='lt', save=True, extra=''):
 
     """
@@ -1154,8 +1169,8 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
     :param dD:
     :param pickledir:
     :param savestr:
-    :param smps_D_idx:
-    :param grimm_D_idx:
+    :param small_D_idx:
+    :param largs_D_idx:
     :param subsample:
     :param RHthresh:
     :param equate:
@@ -1167,7 +1182,7 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
     # create hourly WXT and dN data
     # remove dN data where RH was above a certain threshold
     # date_range = eu.date_range(dN['time'][0], dN['time'][-1] + dt.timedelta(hours=1), 1, 'hours')
-    N_hourly = {'time': dN['time'], 'D': D, 'dD': dD, 'smps_idx': smps_D_idx, 'grimm_idx': grimm_D_idx}
+    N_hourly = {'time': dN['time'], 'D': D, 'dD': dD, 'smps_idx': small_D_idx, 'aps_idx': large_D_idx}
 
     # copy the already avergaed up aerosol variables into N_hourly.
     N_hourly['dN'] = deepcopy(dN['binned'])
@@ -1194,15 +1209,26 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
     met_skip_idx = 0
 
     for t, time_t in enumerate(dN['time'][:-1]):
-        bool = np.logical_and(np.array(met_vars['time'][met_skip_idx:met_skip_idx+200]) > time_t,
-                              np.array(met_vars['time'][met_skip_idx:met_skip_idx+200]) < time_t + dt.timedelta(hours=1))
+
+
+        # bool = np.logical_and(np.array(met_vars['time']) > time_t,
+        #                       np.array(met_vars['time']) < time_t + dt.timedelta(hours=1))
+
+        if t == 0:
+            bool = np.logical_and(np.array(met_vars['time']) > time_t,
+                                  np.array(met_vars['time']) < time_t + dt.timedelta(hours=1))
+        else:
+            bool = np.logical_and(np.array(met_vars['time'][met_skip_idx:met_skip_idx+300]) >= time_t,
+                                  np.array(met_vars['time'][met_skip_idx:met_skip_idx+300]) < time_t + dt.timedelta(hours=1))
 
         met_idx = np.where(bool == True)[0] + met_skip_idx
+        met_idx = np.where(bool == True)[0]
 
         for var in ['RH', 'RH_frac','Tair', 'press']:
 
             # average of variable for this time period, t
             var_i = np.nanmean(met_vars[var][met_idx])
+            # var_i = np.nanmean(met_vars[var][bool])
 
             # store in N_hourly for picle saving
             N_hourly[var][t] = var_i
@@ -1210,36 +1236,36 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
             # store met_vars_avg for diagnosis later
             met_vars_avg[var][t] = var_i
 
-        if subsample == True:
-            # only keep values that are less than the RH threshold by np.nan values above it
-            # only keep values if there was no rain present during the period
-            # do not remove the RH, Tair or pressure values
-            if equate == 'lt':
-                if (met_vars_avg['RH'][t] > RHthresh): #| (med_RR > 0.0):
-                    N_hourly['dN'][t, :] = np.nan
-                    N_hourly['dV/dlogD'][t, :] = np.nan
-                    N_hourly['dN/dlogD'][t, :] = np.nan
-                    N_hourly['Dv_lt2p5'][t] = np.nan
-                    N_hourly['Dn_lt2p5'][t] = np.nan
-                    N_hourly['Dv_2p5_10'][t] = np.nan
-                    N_hourly['Dn_2p5_10'][t] = np.nan
-
-            # only keep values that are greater than the threshold by np.nan values below it
-            # only keep values if there was no rain present during the period
-            elif equate == 'gt':
-                if (met_vars_avg['RH'][t] < RHthresh): #| (med_RR > 0.0):
-                    N_hourly['dN'][t, :] = np.nan
-                    N_hourly['dV/dlogD'][t, :] = np.nan
-                    N_hourly['dN/dlogD'][t, :] = np.nan
-                    N_hourly['Dv_lt2p5'][t] = np.nan
-                    N_hourly['Dn_lt2p5'][t] = np.nan
-                    N_hourly['Dv_2p5_10'][t] = np.nan
-                    N_hourly['Dn_2p5_10'][t] = np.nan
-
-        # change skip idx to miss data already used in averaging
-        #   so the entire time array doesn't need to be searched through for each iteration of t
-        if met_idx.size != 0:
-            met_skip_idx = met_idx[-1] + 1
+        # if subsample == True:
+        #     # only keep values that are less than the RH threshold by np.nan values above it
+        #     # only keep values if there was no rain present during the period
+        #     # do not remove the RH, Tair or pressure values
+        #     if equate == 'lt':
+        #         if (met_vars_avg['RH'][t] > RHthresh): #| (med_RR > 0.0):
+        #             N_hourly['dN'][t, :] = np.nan
+        #             N_hourly['dV/dlogD'][t, :] = np.nan
+        #             N_hourly['dN/dlogD'][t, :] = np.nan
+        #             N_hourly['Dv_lt2p5'][t] = np.nan
+        #             N_hourly['Dn_lt2p5'][t] = np.nan
+        #             N_hourly['Dv_2p5_10'][t] = np.nan
+        #             N_hourly['Dn_2p5_10'][t] = np.nan
+        #
+        #     # only keep values that are greater than the threshold by np.nan values below it
+        #     # only keep values if there was no rain present during the period
+        #     elif equate == 'gt':
+        #         if (met_vars_avg['RH'][t] < RHthresh): #| (med_RR > 0.0):
+        #             N_hourly['dN'][t, :] = np.nan
+        #             N_hourly['dV/dlogD'][t, :] = np.nan
+        #             N_hourly['dN/dlogD'][t, :] = np.nan
+        #             N_hourly['Dv_lt2p5'][t] = np.nan
+        #             N_hourly['Dn_lt2p5'][t] = np.nan
+        #             N_hourly['Dv_2p5_10'][t] = np.nan
+        #             N_hourly['Dn_2p5_10'][t] = np.nan
+        #
+        # # change skip idx to miss data already used in averaging
+        # #   so the entire time array doesn't need to be searched through for each iteration of t
+        # if met_idx.size != 0:
+        #     met_skip_idx = met_idx[-1] + 1
 
     # save dN data in pickle form
     # save time, Dv and N as a pickle
@@ -1254,12 +1280,19 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
             subsamplestr = ''
 
         # save the data
-        # savestr will have the site name and instruments used in it
-        # NOTE! DO NOT USE protocol=HIGHEST..., loading from python in linux does not work for some uknown reason...
-        with open(pickledir + 'N_hourly_'+savestr+subsamplestr+'_'+extra+'.pickle', 'wb') as handle:
-            pickle.dump(N_hourly, handle)
+        # # savestr will have the site name and instruments used in it
+        # # NOTE! DO NOT USE protocol=HIGHEST..., loading from python in linux does not work for some uknown reason...
+        # with open(pickledir + 'N_hourly_'+savestr+subsamplestr+'_'+extra+'.pickle', 'wb') as handle:
+        #     pickle.dump(N_hourly, handle)
+        #
+        # print 'N_hourly_'+savestr+subsamplestr+'_'+extra+'.pickle'+'saved!'
 
-        print 'N_hourly_'+savestr+subsamplestr+'_'+extra+'.pickle'+'saved!'
+
+        # numpy save
+        np.save(pickledir + 'N_hourly_'+savestr+subsamplestr+'_'+extra, N_hourly)
+        print 'N_hourly_'+savestr+subsamplestr+'_'+extra+'.npy'+'saved!'
+
+
 
     return N_hourly, met_vars
 
@@ -1429,6 +1462,8 @@ if __name__ == '__main__':
 
     # year of data - old
     years = ['2016']
+    year = years[0]
+    # years = [str(i) for i in range(2014, 2017)]
 
     # site and instruments
     # period: 'routine' if the obs are routinely taken; 'long_term' if a long period is present; 'ClearfLo' if clearflo.
@@ -1439,12 +1474,12 @@ if __name__ == '__main__':
     # site_meta = {'site_short':'NK', 'site_long': 'North_Kensington', 'period': 'long_term'}
     # site_ins = {'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': False}
 
-    # NK: SMPS and APS
-    site_meta = {'site_short':'NK', 'site_long': 'North_Kensington', 'period': 'long_term'}
-    site_ins = {'DMPS': False, 'APS': True, 'SMPS': True, 'GRIMM': False}
+    # # NK: SMPS and APS
+    # site_meta = {'site_short':'NK', 'site_long': 'North_Kensington', 'period': 'long_term'}
+    # site_ins = {'DMPS': False, 'APS': True, 'SMPS': True, 'GRIMM': False}
 
-    # site_meta = {'site_short':'Ch', 'site_long': 'Chilbolton', 'period': 'routine',
-    #             'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': True}
+    site_meta = {'site_short':'Ch', 'site_long': 'Chilbolton', 'period': 'routine'}
+    site_ins = {'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': True}
 
 
     # time resolution of output data in minutes
@@ -1481,7 +1516,7 @@ if __name__ == '__main__':
         # met_vars['RH_frac'] = met_vars['RH'] * 0.01
 
         # 2014 - 2016 inc.
-        wxt_filepaths = [wxtdir + 'WXT_KSSW_'+year+'_15min.nc' for year in ['2014', '2015', '2016']]
+        wxt_filepaths = [wxtdir + 'WXT_KSSW_'+year+'_15min.nc' for year in years]
         met_vars = eu.netCDF_read(wxt_filepaths, vars=['RH', 'press', 'Tair', 'time'])
         met_vars['RH_frac'] = met_vars['RH'] * 0.01
 
@@ -1541,7 +1576,7 @@ if __name__ == '__main__':
 
             # remove the first column (date) and last 2 cols (empty col and total)
             N_raw = np.asarray(data_frame)
-            smps_N = {'Date': np.array([i.to_datetime() for i in N_raw[:, 0]]),
+            smps_N = {'time': np.array([i.to_datetime() for i in N_raw[:, 0]]),
                       'binned': np.array(N_raw[:, 1:-2]),
                       'headers': np.array(list(data_frame)[1:-2])}
 
@@ -1551,9 +1586,6 @@ if __name__ == '__main__':
             # Read in SMPS data (assuming all SMPS files share the same sort of format)
             filepath_SMPS = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/ERG/' \
                             'SMPSData_NK_2007-2016.xlsx'
-
-            # years to read in
-            years = [str(i) for i in range(2014, 2017)]
 
             print 'NK SMPS long-term read in...'
 
@@ -1569,8 +1601,9 @@ if __name__ == '__main__':
                               'headers': np.array(list(data_frame)[1:-2])}
 
                 # store data
+                # NOTE: Do not do a deepcopy!! for some reason there is a bug that makes the copy data very incorrect!!
                 if year == years[0]:
-                    smps_N = deepcopy(smps_N_year)
+                    smps_N = smps_N_year
                 else:
 
                     # update smps_N with data for this year
@@ -1620,7 +1653,7 @@ if __name__ == '__main__':
                            'APS data NK 2014-2017.csv'
 
             # read in the data
-            aps_N = read_routine_aps(filepath_aps)
+            aps_N = read_routine_aps(filepath_aps, year)
 
             # calculate bin parameters
             # The headers correspond to the min bin edge. Therefore, the header along is the bin max.
@@ -1650,7 +1683,8 @@ if __name__ == '__main__':
         # merge the dmps and APS dNdlogD datasets together...
         # set up so data resolution is the same
         # grimm D bins gets trimmed so bring it back out
-        dNdlogD, grimm_dNlogD, smps_D_idx, grimm_D_idx = merge_smps_grimm_dNdlogD(smps_dNdlogD, grimm_dNdlogD, timeRes=timeRes)
+        dNdlogD, grimm_dNlogD, small_D_idx, large_D_idx = merge_smps_grimm_dNdlogD(smps_dNdlogD, grimm_dNdlogD, timeRes=timeRes)
+
 
         D = dNdlogD['D']
         dD = dNdlogD['dD']
@@ -1781,7 +1815,7 @@ if __name__ == '__main__':
     # extract out only aerosol data based on the RH threshold and if it is less or more than it.
     # Necessary if the measurements were taken at ambient RH and not dried before measureing
     N_hourly, met_avg = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
-                                    small_D_idx, large_D_idx, subsample=False, save=True, extra='20140101-20161231')
+                                    small_D_idx, large_D_idx, subsample=False, save=True, extra=year + '_extra_months_fast')
 
     # N_hourly_50, _ = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
     #                                 smps_D_idx, grimm_D_idx, subsample=True, RHthresh=50.0, equate='lt', save=False)
