@@ -19,7 +19,7 @@ Dv = volume mean diameter
 import matplotlib.pyplot as plt
 from matplotlib.dates import DateFormatter
 import pickle
-import netCDF4 as nc
+from scipy.stats import pearsonr
 
 import numpy as np
 import datetime as dt
@@ -182,6 +182,7 @@ def read_clearflo_aps(filepath_aps):
 
     """
     Read in the apd data from clearflo. Very similar structure to read_dmps()
+    APS data is WET, therefore it needs to be dried. Use physical growth factors (GF) to reduce size appropriately
     :param filepath_aps:
     :return:
     """
@@ -270,7 +271,7 @@ def read_routine_aps(filepath_aps, year):
         # create N
         N = {'binned': N_processed[start:end+1, :],
              'time': pro_time[start:end+1],
-             'headers': header_mid}
+             'headers': header_mid} #nm due to conversion above
 
     else:
         raise ValueError('Headers do not allign between APS data and APS definitions!')
@@ -885,6 +886,7 @@ def merge_small_large_dNdlogD(small_dNdlogD, large_dNdlogD, timeRes=60):
     # find which bins DO NOT overlap, and keep those.
     large_idx = np.where(large_dNdlogD['D'] >= small_dNdlogD['D'][-1])[0]
 
+
     # trim
     large_dNdlogD['D'] = large_dNdlogD['D'][large_idx]
     large_dNdlogD['dD'] = large_dNdlogD['dD'][large_idx]
@@ -904,7 +906,7 @@ def merge_small_large_dNdlogD(small_dNdlogD, large_dNdlogD, timeRes=60):
     # insert the smps data first, take average of all data within the time period
     for t in range(len(time_range)):
 
-        ## 1. SMPS
+        ## 1. Small
 
         # find data for this time
         # currently set subsample to be arbitrarily 200 elements above the previous sampled element's idx.
@@ -928,7 +930,7 @@ def merge_small_large_dNdlogD(small_dNdlogD, large_dNdlogD, timeRes=60):
 
         # -------------
 
-        ## 2. GRIMM
+        ## 2. Large
 
         # find data for this time
         large_binary = np.logical_and(large_dNdlogD['time'][large_skip_idx:large_skip_idx+600] >= time_range[t],
@@ -966,16 +968,23 @@ def get_size_range_idx(D, D_min, D_max):
 
     """
     Get the size range idx for all diameters between the given minimum and maximum diameters.
+    :param D_min: minimumum diameter for the accumulation range
+    :param D_max: maximum diameter for the accumulation range
+    :return: fine_range_idx: idx range for the fine mode distribution
     :return: accum_range_idx
+    :return: coarse_range_idx
 
-    Function would work if diameter was replaced with radius
     """
 
     accum_minD, accum_minD_idx, _ = eu.nearest(D, D_min)
     accum_maxD, accum_maxD_idx, _ = eu.nearest(D, D_max)
     accum_range_idx = range(accum_minD_idx, accum_maxD_idx + 1)
 
-    return accum_range_idx
+    # define fine and coarse ranges here, so the idx edge between modes do not overlap
+    fine_range_idx = range(0, accum_minD_idx)
+    coarse_range_idx = range(accum_maxD_idx + 1, len(D))
+
+    return fine_range_idx, accum_range_idx, coarse_range_idx
 
 def calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D, units='nm'):
 
@@ -1153,9 +1162,6 @@ def calc_geometric_mean_and_stdev_radius(size_range_idx, dNdD, dNdlogD, dlogD, D
 
     return r_g, stdev_g_r
 
-# dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
-#                                     small_D_idx, large_D_idx, subsample=False, save=True, extra=year
-
 def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr, small_D_idx, large_D_idx,
                                          subsample=True, RHthresh=60.0, equate='lt', save=True, extra=''):
 
@@ -1188,10 +1194,10 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
     N_hourly['dN'] = deepcopy(dN['binned'])
     N_hourly['dV/dlogD'] = deepcopy(dVdlogD['binned'])
     N_hourly['dN/dlogD'] = deepcopy(dNdlogD['binned'])
-    N_hourly['Dv_lt2p5'] = deepcopy(dNdlogD['Dv_lt2p5'])
-    N_hourly['Dn_lt2p5'] = deepcopy(dNdlogD['Dn_lt2p5'])
-    N_hourly['Dv_2p5_10'] = deepcopy(dNdlogD['Dv_2p5_10'])
-    N_hourly['Dn_2p5_10'] = deepcopy(dNdlogD['Dn_2p5_10'])
+    #N_hourly['Dv_lt2p5'] = deepcopy(dNdlogD['Dv_lt2p5'])
+    #N_hourly['Dn_lt2p5'] = deepcopy(dNdlogD['Dn_lt2p5'])
+    #N_hourly['Dv_2p5_10'] = deepcopy(dNdlogD['Dv_2p5_10'])
+    #N_hourly['Dn_2p5_10'] = deepcopy(dNdlogD['Dn_2p5_10'])
 
 
 
@@ -1231,7 +1237,7 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
             # var_i = np.nanmean(met_vars[var][bool])
 
             # store in N_hourly for picle saving
-            N_hourly[var][t] = var_i
+            # N_hourly[var][t] = var_i
 
             # store met_vars_avg for diagnosis later
             met_vars_avg[var][t] = var_i
@@ -1292,7 +1298,110 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
         np.save(pickledir + 'N_hourly_'+savestr+subsamplestr+'_'+extra, N_hourly)
         print 'N_hourly_'+savestr+subsamplestr+'_'+extra+'.npy'+'saved!'
 
+    return N_hourly, met_vars
 
+def np_save_N_r(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr, small_D_idx, large_D_idx,
+                                         subsample=True, RHthresh=60.0, equate='lt', save=True, extra=''):
+
+    """
+    Create hourly version of the aerosol data for saving. Also only take data based on an RH threshold
+    :param dN:
+    :param dVdlogD:
+    :param dNdlogD:
+    :param met_vars:
+    :param D:
+    :param dD:
+    :param pickledir:
+    :param savestr:
+    :param small_D_idx:
+    :param largs_D_idx:
+    :param subsample:
+    :param RHthresh:
+    :param equate:
+    :param save [bool]: Turn saving on/off
+    :param extra: extra string to change the savename
+    :return:
+    """
+
+    # create hourly WXT and dN data
+    # remove dN data where RH was above a certain threshold
+    # date_range = eu.date_range(dN['time'][0], dN['time'][-1] + dt.timedelta(hours=1), 1, 'hours')
+    N_hourly = {'time': dN['time'], 'D': D, 'dD': dD, 'smps_idx': small_D_idx, 'aps_idx': large_D_idx}
+
+    # copy the already avergaed up aerosol variables into N_hourly.
+    N_hourly['dN'] = deepcopy(dN['binned'])
+    N_hourly['dV/dlogD'] = deepcopy(dVdlogD['binned'])
+    N_hourly['dN/dlogD'] = deepcopy(dNdlogD['binned'])
+    N_hourly['dN/dlogD']
+
+
+
+    # set up empty arrays for met data tp fill
+    for met_key in ['RH', 'RH_frac', 'Tair', 'press']:
+        N_hourly[met_key] = np.empty(len(dN['time']))
+        N_hourly[met_key][:] = np.nan
+
+    # keep average of met variables in a separate dictionary for later diagnostics
+    met_vars_avg = {}
+    for var in ['RH', 'RH_frac', 'Tair', 'press']:
+        met_vars_avg[var] = np.empty(len(dN['time']))
+        met_vars_avg[var][:] = np.nan
+
+    met_skip_idx = 0
+
+    for t, time_t in enumerate(dN['time'][:-1]):
+
+
+        # bool = np.logical_and(np.array(met_vars['time']) > time_t,
+        #                       np.array(met_vars['time']) < time_t + dt.timedelta(hours=1))
+
+        if t == 0:
+            bool = np.logical_and(np.array(met_vars['time']) > time_t,
+                                  np.array(met_vars['time']) < time_t + dt.timedelta(hours=1))
+        else:
+            bool = np.logical_and(np.array(met_vars['time'][met_skip_idx:met_skip_idx+300]) >= time_t,
+                                  np.array(met_vars['time'][met_skip_idx:met_skip_idx+300]) < time_t + dt.timedelta(hours=1))
+
+        met_idx = np.where(bool == True)[0] + met_skip_idx
+        met_idx = np.where(bool == True)[0]
+
+        for var in ['RH', 'RH_frac','Tair', 'press']:
+
+            # average of variable for this time period, t
+            var_i = np.nanmean(met_vars[var][met_idx])
+            # var_i = np.nanmean(met_vars[var][bool])
+
+            # store in N_hourly for picle saving
+            N_hourly[var][t] = var_i
+
+            # store met_vars_avg for diagnosis later
+            met_vars_avg[var][t] = var_i
+
+
+    # save dN data in pickle form
+    # save time, Dv and N as a pickle
+    # with open(pickledir + 'dN_dmps_aps_clearfloWinter.pickle', 'wb') as handle:
+    #     pickle.dump(dN, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    if save == True:
+
+        # change the savename, based on whether subsampling took place
+        if subsample == True:
+            samplesamplestr = '_'+equate+str(RHthresh)+'_cut'
+        else:
+            subsamplestr = ''
+
+        # save the data
+        # # savestr will have the site name and instruments used in it
+        # # NOTE! DO NOT USE protocol=HIGHEST..., loading from python in linux does not work for some uknown reason...
+        # with open(pickledir + 'N_hourly_'+savestr+subsamplestr+'_'+extra+'.pickle', 'wb') as handle:
+        #     pickle.dump(N_hourly, handle)
+        #
+        # print 'N_hourly_'+savestr+subsamplestr+'_'+extra+'.pickle'+'saved!'
+
+
+        # numpy save
+        np.save(pickledir + 'N_hourly_'+savestr+subsamplestr+'_'+extra, N_hourly)
+        print 'N_hourly_'+savestr+subsamplestr+'_'+extra+'.npy'+'saved!'
 
     return N_hourly, met_vars
 
@@ -1453,12 +1562,14 @@ if __name__ == '__main__':
     maindir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/'
     datadir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/'
     wxtdir = maindir + 'data/L1/'
+    GFdir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/common_data/'
 
     savedir = maindir + 'figures/number_concentration/'
 
     # data
     rhdatadir = maindir + 'data/L1/'
     pickledir = maindir + 'data/pickle/'
+    npydir = maindir + 'data/npy/number_distribution/'
 
     # year of data - old
     years = ['2016']
@@ -1474,12 +1585,12 @@ if __name__ == '__main__':
     # site_meta = {'site_short':'NK', 'site_long': 'North_Kensington', 'period': 'long_term'}
     # site_ins = {'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': False}
 
-    # # NK: SMPS and APS
-    # site_meta = {'site_short':'NK', 'site_long': 'North_Kensington', 'period': 'long_term'}
-    # site_ins = {'DMPS': False, 'APS': True, 'SMPS': True, 'GRIMM': False}
+    # NK: SMPS and APS
+    site_meta = {'site_short':'NK', 'site_long': 'North_Kensington', 'period': 'long_term'}
+    site_ins = {'DMPS': False, 'APS': True, 'SMPS': True, 'GRIMM': False}
 
-    site_meta = {'site_short':'Ch', 'site_long': 'Chilbolton', 'period': 'routine'}
-    site_ins = {'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': True}
+    # site_meta = {'site_short':'Ch', 'site_long': 'Chilbolton', 'period': 'routine'}
+    # site_ins = {'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': True}
 
 
     # time resolution of output data in minutes
@@ -1712,7 +1823,7 @@ if __name__ == '__main__':
 
         # As time resolution is already in 15 mins, create a 'Time' entry from 'Date'
         dNdlogD = smps_dNdlogD
-        dNdlogD['time'] = smps_N['Date']
+        dNdlogD['time'] = smps_N['time']
 
         D = smps_N['D']
         logD = smps_N['logD']
@@ -1797,28 +1908,27 @@ if __name__ == '__main__':
     # Get size range
     D_min = 0.0 # use lowest value in D as the lower limit
     D_max = 2500.0 # 2.5 microns
-    size_range_idx = get_size_range_idx(D, D_min, D_max)
+    _, size_range_idx, _ = get_size_range_idx(D, D_min, D_max)
 
     dNdlogD['Dv_lt2p5'], dNdlogD['Dn_lt2p5'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D)
 
     # calculate the volume and number mean diameters for the 2.5 - 10 micron (Dv and Dn respectively)
     D_min = 2500.0 # 2.5 microns
     D_max = 10000.0 # 10 microns
+    _, size_range_idx, _ = get_size_range_idx(D, D_min, D_max)
     dNdlogD['Dv_2p5_10'], dNdlogD['Dn_2p5_10'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D)
 
     # calculate the volume and number mean diameters for below 10 micron (Dv and Dn respectively)
     D_min = 0.0 # 0 microns
     D_max = 10000.0 # 10 microns
+    _, size_range_idx, _ = get_size_range_idx(D, D_min, D_max)
     dNdlogD['Dv_10'], dNdlogD['Dn_10'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D)
 
 
-    # extract out only aerosol data based on the RH threshold and if it is less or more than it.
-    # Necessary if the measurements were taken at ambient RH and not dried before measureing
-    N_hourly, met_avg = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
-                                    small_D_idx, large_D_idx, subsample=False, save=True, extra=year + '_extra_months_fast')
-
-    # N_hourly_50, _ = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
-    #                                 smps_D_idx, grimm_D_idx, subsample=True, RHthresh=50.0, equate='lt', save=False)
+    # # extract out only aerosol data based on the RH threshold and if it is less or more than it.
+    # # Necessary if the measurements were taken at ambient RH and not dried before measureing
+    # N_hourly, met_avg = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
+    #                                 small_D_idx, large_D_idx, subsample=False, save=True, extra=year + '_extra_months_fast')
 
     # # # quickplot what it looks like
     # # quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir)
@@ -1849,54 +1959,84 @@ if __name__ == '__main__':
 
     # NOTE! D is in nm
     # calculate the volume and number mean diameters for the given diameter range (Dv and Dn respectively)
-    D_min = 40.0
-    D_max = 700.0
+    # paper 1 accum radii range: 40 - 700 nm - ClearfLo
+    # using dV/dlogD for NK (2015) diameter range: 80 - 1000 nm
+    D_min_accum = 80.0
+    D_max_accum = 1000.0
 
-    # get the idx for the accumulation range
-    accum_range_idx = get_size_range_idx(D, D_min, D_max)
+    # get the idx for each range
+    fine_range_idx, accum_range_idx, coarse_range_idx = get_size_range_idx(D, D_min_accum, D_max_accum)
 
     # calculate the mean volume and mean number diameter
     dNdlogD['Dv_accum'], dNdlogD['Dn_accum'] = calc_volume_and_number_mean_diameter(accum_range_idx, dNdD, dNdlogD, dlogD, D)
+    dNdlogD['Dv_fine'], dNdlogD['Dn_fine'] = calc_volume_and_number_mean_diameter(fine_range_idx, dNdD, dNdlogD, dlogD, D)
+    # dNdlogD['Dv_coarse'], dNdlogD['Dn_coarse'] = calc_volume_and_number_mean_diameter(coarse_range_idx, dNdD, dNdlogD, dlogD, D)
+
+    # Get total number of particles (eqn 8.9)
+    dNdlogD['Ntot_accum'] = np.sum(dNdlogD['binned'][:, accum_range_idx] * dlogD[None, accum_range_idx], axis=1)
+    dNdlogD['Ntot_fine'] = np.sum(dNdlogD['binned'][:, fine_range_idx] * dlogD[None, fine_range_idx], axis=1)
+    # dNdlogD['Ntot_coarse'] = np.sum(dNdlogD['binned'][:, coarse_range_idx] * dlogD[None, coarse_range_idx], axis=1)
+
+    dNdlogD['Ntot'] = np.sum(dNdlogD['binned'] * dlogD[None, :], axis=1)
+
+    # np.nanmean(dNdlogD['Ntot_accum'])
 
     # calculate the geometric mean and geometric standard deviation of the radius
     dNdlogD['r_g'], dNdlogD['stdev_g_r'] = calc_geometric_mean_and_stdev_radius(accum_range_idx, dNdD, dNdlogD, dlogD, D, units='nm')
 
-    # statistics and plots on r_g and stdev_g_r
-    quick_plot_r_g(dNdlogD, D_min, D_max, site_meta, savestr)
-    quick_plot_stdev_g_r(dNdlogD, D_min, D_max, site_meta, savestr)
+    # # statistics and plots on r_g and stdev_g_r
+    # quick_plot_r_g(dNdlogD, D_min, D_max, site_meta, savestr)
+    # quick_plot_stdev_g_r(dNdlogD, D_min, D_max, site_meta, savestr)
 
     # np.nanmean(dNdlogD['r_g'])
     # np.nanmean(dNdlogD['stdev_g_r'])
 
-    plt.scatter(dNdlogD['r_g'][~np.isnan(dNdlogD['r_g'])], dNdlogD['stdev_g_r'][~np.isnan(dNdlogD['stdev_g_r'])])
+    #plt.scatter(dNdlogD['r_g'][~np.isnan(dNdlogD['r_g'])], dNdlogD['stdev_g_r'][~np.isnan(dNdlogD['stdev_g_r'])])
+    #plt.scatter(dNdlogD['r_g'][~np.isnan(dNdlogD['r_g'])], dNdlogD['Dn_accum'][~np.isnan(dNdlogD['Dn_accum'])]/2.0)
 
-    # plot time series of r for defined acumm range
-    fig = plt.figure()
-    # plt.plot((dVdD['Dv'] * 1e-3) / 2, label='rv using dN/dD')
-    plt.plot_date(dNdlogD['time'], (dNdlogD['Dn_accum'] * 1e-3) / 2, label='rv using dN/dlogD', linestyle='-', fmt='-')
-    plt.ylabel('rv [microns]')
-    plt.xlabel('Date [dd/mm]')
+    # # plot time series of r for defined acumm range
+    # fig = plt.figure()
+    # # plt.plot((dVdD['Dv'] * 1e-3) / 2, label='rv using dN/dD')
+    # plt.plot_date(dNdlogD['time'], (dNdlogD['Dn_accum'] * 1e-3) / 2, label='rv using dN/dlogD', linestyle='-', fmt='-')
+    # plt.ylabel('rv [microns]')
+    # plt.xlabel('Date [dd/mm]')
+    # ax = plt.gca()
+    # ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
+    # # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
+    # # plt.legend()
+    # # plt.savefig(savedir + 'aerosol_distributions/rv_accum_0p02_0p7.png')
+    # # plt.close(fig)
+
+
+    #
+    # save time, Dv and N as a pickle
+    np_save_data = {'time': dNdlogD['time'], 'Ntot': dNdlogD['Ntot'],
+                   'Dv_accum': dNdlogD['Dv_accum'], 'Ntot_accum': dNdlogD['Ntot_accum'],
+                   'Dv_fine': dNdlogD['Dv_fine'], 'Ntot_fine': dNdlogD['Ntot_fine']}
+    np.save(npydir + 'accum_Ntot_Dv_'+savestr+'_'+year+'.npy', np_save_data)
+    print (npydir + 'Ntot_Dv_fine_accum_'+savestr+'_'+year+'.npy saved!')
+
+    # plot r_v (volume mean) against r_g (geometric mean)
+    #   need to estimate r_g from r_v as r_g is needed for f_RH LUT and only r_v is estimated from MURK aerosol
+    #   mass in aerFO
+
+    x = dNdlogD['Dv_accum'] / 2 / 1e3
+    y = dNdlogD['r_g'] / 1e3
+    idx = np.isfinite(x) & np.isfinite(y)
+    m, b = np.polyfit(x[idx], y[idx], 1)
+    r, p = pearsonr(x[idx], y[idx])
+
+    fig= plt.figure()
     ax = plt.gca()
-    ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
-    # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
-    # plt.legend()
-    # plt.savefig(savedir + 'aerosol_distributions/rv_accum_0p02_0p7.png')
-    # plt.close(fig)
+    plt.scatter(x, y, s=3)
+    y_lim = ax.get_ylim()
+    x_lim = ax.get_xlim()
+    ax.plot(np.array(x_lim), m * np.array(x_lim) + b, ls='-', color='black')
+    plt.xlabel(r'$\mathrm{r_{v}}$ (volume mean radius) [microns]')
+    plt.ylabel(r'$\mathrm{r_{g}}$ (geometric mean radius) [microns]')
+    eu.add_at(ax, 'eq: y=%1.6sx + %1.6s; pearson r=%1.4s, p=%1.4s' % (m, b,r,p))
+    plt.savefig(savedir + savestr + '_' + year + '_' + 'r_v_vs_r_g.png')
 
-    # # Get total number of particles (eqn 8.9)
-    # for t in range(len(dNdD['time'])):
-    #
-    #     dNdlogD['Ntot_accum'][t] = np.sum(dNdlogD['binned'][t, accum_range_idx] * dlogD[accum_range_idx])
-    #     dNdlogD['Ntot'][t] = np.sum(dNdlogD['binned'][t, :] * dlogD)
-    #
-    # np.nanmean(dNdlogD['Ntot_accum'])
-    #
-
-    #
-    # # save time, Dv and N as a pickle
-    # pickle_save = {'time': dNdlogD['time'], 'Ntot': dNdlogD['Ntot_accum'], 'Dv': dNdlogD['Dv_accum']}
-    # with open(pickledir + 'accum_Ntot_Dv_'+savestr+'.pickle', 'wb') as handle:
-    #     pickle.dump(pickle_save, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     # ==============================================================================
     # RH against r and N
