@@ -182,7 +182,6 @@ def read_clearflo_aps(filepath_aps):
 
     """
     Read in the apd data from clearflo. Very similar structure to read_dmps()
-    APS data is WET, therefore it needs to be dried. Use physical growth factors (GF) to reduce size appropriately
     :param filepath_aps:
     :return:
     """
@@ -215,14 +214,15 @@ def read_clearflo_aps(filepath_aps):
 
     return N, header_bins
 
-def read_routine_aps(filepath_aps, year):
+def read_routine_aps(filepath_aps, year, met_vars):
 
     """
     Read in the routinely taken APS data, given to us by ERG
+    APS data is WET, therefore it needs to be dried. Use physical growth factors (GF) to reduce size appropriately
     :param filepath_aps:
     :param year: year [str] though it gets used in int() further down
-    :return: N [dictionary with each header as a key]
-    :return: header_mid: the headers [list of strings]
+    :param met_vars: meteorological variables including RH_fraction
+    :return: N [dictionary]
     """
 
     # APS headers
@@ -271,10 +271,41 @@ def read_routine_aps(filepath_aps, year):
         # create N
         N = {'binned': N_processed[start:end+1, :],
              'time': pro_time[start:end+1],
-             'headers': header_mid} #nm due to conversion above
+             'headers_orig': header_mid} #nm due to conversion above
 
     else:
         raise ValueError('Headers do not allign between APS data and APS definitions!')
+
+    # read in the aps GF and adjust the diameters
+    GFfile = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/common_data/GF_climatology_NK_APS.npy'
+    data = np.load(GFfile).flat[0]
+    GF_clim = data['GF_climatology']
+    RH_frac = data['RH_frac']
+
+    # apply GF to dry the APS sizes
+    # create array ready to be filled
+    headers_shrink = np.empty(N['binned'].shape)
+    headers_shrink[:] = np.nan
+
+
+
+    for t_idx, t in enumerate(N['time']):
+
+        # find month idx
+        m_idx = t.month-1
+        # # find nearest time idx in met_vars to APS
+        # _, n_time, _ = eu.nearest(met_vars['time'], t)
+        # find nearest time idx in met_vars to APS
+        # binary search = faster method
+        n_time = eu.binary_search(met_vars['time'], t, lo=max(0,t_idx-1000), hi=min(t_idx+1000, len(met_vars['time'])))
+        #_, n_time, _ = eu.nearest(met_vars['time'], t)
+        # find nearest RH idx
+        _, rh_idx, _ = eu.nearest(RH_frac, met_vars['RH_frac'][n_time])
+
+        # apply the GF correction (divide by GF as the APS data needs to be shrunk!)
+        headers_shrink[t_idx, :] = N['headers_orig'] / GF_clim[m_idx, rh_idx, :]
+
+    N['headers'] = headers_shrink
 
     return N
 
@@ -524,16 +555,18 @@ def calc_bin_parameters_general(N, units='nm'):
     D = N['headers']
 
     # bin max -> the bin + half way to the next bin
-    D_diffs = D[1:] - D[:-1] # checked
-    D_max = D[:-1] + (D_diffs / 2.0) # checked
+    D_diffs = D[:, 1:] - D[:, :-1] # checked
+    D_max = D[:, :-1] + (D_diffs / 2.0) # checked
 
     # upper edge difference for the last bin is assumed be equal to the upper edge difference of the second to last bin
     #   therefore add the upper edge difference of the second to last bin, to the last bin.
-    D_max = np.append(D_max, D[-1] + (D_diffs[-1]/2.0)) # checked
+    # D_max = np.append(D_max, D[:, -1] + (D_diffs[:, -1]/2.0)) # checked # orig
+    D_max = np.hstack((D_max, (D[:, -1] + (D_diffs[:, -1] / 2.0))[:, None]))
+
     # lower edge difference for the first bin is assumed to be equal to the lower edge difference of the second bin,
     #   therefore subtract the lower edge difference of the second bin, from the first bin.
     # lower edge of subsequent bins = upper edge of the previous bin, hence using D_max[:-1]
-    D_min = np.append(D[0] - (D_diffs[0]/2.0), D_max[:-1]) # checked
+    D_min = np.hstack(((D[:, 0] - (D_diffs[:, 0]/2.0))[:, None], D_max[:, :-1])) # checked
 
     # bin parameters
     logD = np.log10(D)
@@ -687,7 +720,8 @@ def calc_dNdlogD_from_N_general(N):
                     'binned': np.empty(N['binned'].shape)}
     dNdlogD['binned'][:] = np.nan
 
-    for D_idx, dlogD_i in enumerate(N['dlogD']):
+    for D_idx, dlogD_i in enumerate(list(N['dlogD'].transpose())):
+        #  dNdlogD['binned'][:, D_idx] = N['binned'][:, D_idx] / dlogD_i
         dNdlogD['binned'][:, D_idx] = N['binned'][:, D_idx] / dlogD_i
 
     return dNdlogD
@@ -882,83 +916,84 @@ def merge_small_large_dNdlogD(small_dNdlogD, large_dNdlogD, timeRes=60):
     # end_time = np.max([small_dNdlogD['time'][-1], large_dNdlogD['time'][-1]])
     time_range = eu.date_range(start_time, end_time, timeRes, 'minutes')
 
-    # trim the grimm data that overlaps with the dmps (as smps has higher D binning resolution)
+    # Simple trim method for the large particle sizes to reduce overlap and double counting (as smps has higher D binning resolution)
     # find which bins DO NOT overlap, and keep those.
-    large_idx = np.where(large_dNdlogD['D'] >= small_dNdlogD['D'][-1])[0]
-
+    # bulk trimming approach (using mean(D)) - effect of taking mean should be relatively small
+    #   more comprehensive approach would vary D length with time and not use mean(D).
+    # large_idx = np.where(large_dNdlogD['D'] >= small_dNdlogD['D'][-1])[0]
+    large_idx = np.where(np.nanmean(large_dNdlogD['D'],axis=0) >= small_dNdlogD['D'][-1])[0]
 
     # trim
-    large_dNdlogD['D'] = large_dNdlogD['D'][large_idx]
-    large_dNdlogD['dD'] = large_dNdlogD['dD'][large_idx]
-    large_dNdlogD['dlogD'] = large_dNdlogD['dlogD'][large_idx]
-    large_dNdlogD['logD'] = large_dNdlogD['logD'][large_idx]
+    large_dNdlogD['D'] = large_dNdlogD['D'][:, large_idx]
+    large_dNdlogD['dD'] = large_dNdlogD['dD'][:, large_idx]
+    large_dNdlogD['dlogD'] = large_dNdlogD['dlogD'][:, large_idx]
+    large_dNdlogD['logD'] = large_dNdlogD['logD'][:, large_idx]
     large_dNdlogD['binned'] = large_dNdlogD['binned'][:, large_idx]
 
-
     # binned shape = [time, bin]
-    dNdlogD = {'time': time_range,
-               'binned': np.empty([len(time_range), len(small_dNdlogD['D']) + len(large_dNdlogD['D'])])}
-    dNdlogD['binned'][:] = np.nan
+    dNdlogD = {'time': time_range}
+    # prepare dNdlogD ready with the different arrays, ready to be filled
+    for param in ['binned', 'D', 'dD', 'dlogD', 'logD']:
+        dNdlogD[param] = np.empty([len(time_range), len(small_dNdlogD['D']) + len(large_idx)])
+        dNdlogD[param][:] = np.nan
+    del large_idx  # cleanup as its used lower down
 
-    small_skip_idx = 0
-    large_skip_idx = 0
+    # duplicate the small ins sizes, and put them into dNdlogD ready.
+    small_D_idx = range(len(small_dNdlogD['D']))
+    for param in ['D', 'dD', 'dlogD', 'logD']:
+        # repeat the small D to match the dimensions of the large D
+        dNdlogD[param][:, small_D_idx] = np.tile(small_dNdlogD[param],(dNdlogD[param].shape[0],1))
+
+    # get an initial lo for binary searching, for the small and large instrument time arrays (low idx to narrow down search range)
+    lo_small = eu.binary_search(small_dNdlogD['time'], time_range[0])
+    lo_large = eu.binary_search(large_dNdlogD['time'], time_range[0])
 
     # insert the smps data first, take average of all data within the time period
-    for t in range(len(time_range)):
+    for t_idx, t in enumerate(time_range):
 
         ## 1. Small
 
         # find data for this time
-        # currently set subsample to be arbitrarily 200 elements above the previous sampled element's idx.
-        small_binary = np.logical_and(small_dNdlogD['time'][small_skip_idx:small_skip_idx+600] > time_range[t],
-                                     small_dNdlogD['time'][small_skip_idx:small_skip_idx+600] <= time_range[t] + dt.timedelta(minutes=timeRes))
-
         # get idx location of the current subsample (small_skip_idx:small_skip_idx+200) and add on how many idx elements
         #   have been skipped so far (small_skip_idx), such that small_idx = location of elements in the time period
         #   within the entire array [:]
-        small_idx = np.where(small_binary == True)[0] + small_skip_idx
+        # (+1 on s) do not include s as this should be apart of the previous small_idx range.
+        # s = start, e = end
+        s = eu.binary_search(small_dNdlogD['time'], t, lo=lo_small) + 1
+        e = eu.binary_search(small_dNdlogD['time'], t + dt.timedelta(minutes=timeRes), lo=lo_small)
+        small_idx = range(s, e+1)
+        lo_small = s - 1  # move lo up as s move up between iterations (-1 not necessary but just to be safe...)
 
-        for D_idx in range(len(small_dNdlogD['D'])):  # smaller data fill the first columns
+        for D_idx in range(small_dNdlogD['D'].shape[-1]):  # smaller data fill the first columns
 
             # create mean of all data within the time period and store
-            dNdlogD['binned'][t, D_idx] = np.nanmean(small_dNdlogD['binned'][small_idx, D_idx])
-
-        # change skip idx to miss data already used in averaging
-        #   so the entire time array doesn't need to be searched through for each iteration of t
-        if small_idx.size != 0:
-            small_skip_idx = small_idx[-1] + 1
+            dNdlogD['binned'][t_idx, D_idx] = np.nanmean(small_dNdlogD['binned'][small_idx, D_idx])
 
         # -------------
 
         ## 2. Large
 
         # find data for this time
-        large_binary = np.logical_and(large_dNdlogD['time'][large_skip_idx:large_skip_idx+600] >= time_range[t],
-                                      large_dNdlogD['time'][large_skip_idx:large_skip_idx+600] < time_range[t] + dt.timedelta(minutes=timeRes))
-        # idx = np.where(binary == True)[0]
+        s = eu.binary_search(large_dNdlogD['time'], t, lo=lo_large) + 1
+        e = eu.binary_search(large_dNdlogD['time'], t + dt.timedelta(minutes=timeRes), lo=lo_large)
+        large_idx = range(s, e+1)
+        lo_large = s - 1  # move lo up as s move up between iterations (-1 not necessary but just to be safe...)
 
-        large_idx = np.where(large_binary == True)[0] + large_skip_idx
+        for D_idx in range(large_dNdlogD['D'].shape[-1]):  # smaller data fill the first columns
 
-        for D_idx in range(len(large_dNdlogD['D'])):  # smaller data fill the first columns
-
-            # idx in new dNlogD array (data will go after the smps data)
+            # idx in new dNlogD array (large ins. data will go after the small ins. size data)
             D_binned_idx = D_idx + len(small_dNdlogD['D'])
 
             # create mean of all data within the time period and store
-            # dNdlogD['binned'][t, D_binned_idx] = np.nanmean(large_dNdlogD['binned'][large_binary, D_idx])
-            dNdlogD['binned'][t, D_binned_idx] = np.nanmean(large_dNdlogD['binned'][large_idx, D_idx])
+            dNdlogD['binned'][t_idx, D_binned_idx] = np.nanmean(large_dNdlogD['binned'][large_idx, D_idx])
 
-        # change skip idx to miss data already used in averaging
-        if large_idx.size != 0:
-            large_skip_idx = large_idx[-1] + 1
-
-    # merge the dimaeter bins together too
-    for param in ['D', 'dD', 'dlogD', 'logD']:
-        dNdlogD[param] = np.append(small_dNdlogD[param], large_dNdlogD[param])
+            # Create mean of all the large ins. diameter variables as these are also now time varying with RH
+            for param in ['D', 'dD', 'dlogD', 'logD']:
+                dNdlogD[param][t_idx, D_binned_idx] = np.nanmean(large_dNdlogD[param][large_idx, D_idx])
 
     # keep the index position of the original instruments D, within the combined D range
-    small_D_idx = np.arange(len(small_dNdlogD['D']))
-    large_D_idx = np.arange(small_D_idx[-1] + 1, len(dNdlogD['D']))
+    small_D_idx = np.arange(small_dNdlogD['D'].shape[-1])
+    large_D_idx = np.arange(small_D_idx[-1] + 1, dNdlogD['D'].shape[-1])
 
     return dNdlogD, large_dNdlogD, small_D_idx, large_D_idx
 
@@ -1571,8 +1606,9 @@ if __name__ == '__main__':
     pickledir = maindir + 'data/pickle/'
     npydir = maindir + 'data/npy/number_distribution/'
 
-    # year of data - old
-    years = ['2016']
+    # year of data
+    # for NK - only got 2014 and 2015 with APS data
+    years = ['2015']
     year = years[0]
     # years = [str(i) for i in range(2014, 2017)]
 
@@ -1764,7 +1800,7 @@ if __name__ == '__main__':
                            'APS data NK 2014-2017.csv'
 
             # read in the data
-            aps_N = read_routine_aps(filepath_aps, year)
+            aps_N = read_routine_aps(filepath_aps, year, met_vars)
 
             # calculate bin parameters
             # The headers correspond to the min bin edge. Therefore, the header along is the bin max.
@@ -1835,6 +1871,7 @@ if __name__ == '__main__':
     if (site_ins['SMPS'] == True) & (site_ins['APS'] == True):
 
         # delete overlapping bins and merge
+        # merge the dried APS (2D) diameters with smps (originally 1D, turned 2D when merged)
         dNdlogD, aps_dNdlogD_2, small_D_idx, large_D_idx = merge_small_large_dNdlogD(smps_dNdlogD, aps_dNdlogD, timeRes=timeRes)
 
         D = dNdlogD['D']
@@ -1845,6 +1882,9 @@ if __name__ == '__main__':
     # ==============================================================================
     # Main processing of data
     # ==============================================================================
+
+    # Align RH with APS data
+    # shrink APS data
 
     # Set up the other aerosol distribution arrays in a similar style to dNdlogD (dictionaries with a 'binned' array)
     # ToDo keep 'sum' for now, though it originally served a prupose it is redunden, check if it might still be useful
