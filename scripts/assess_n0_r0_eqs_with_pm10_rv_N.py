@@ -56,7 +56,7 @@ if __name__ == '__main__':
     maindir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/'
     datadir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/'
     pm10dir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/DEFRA/'
-    savedir = maindir + 'figures/number_concentration/'
+    savedir = maindir + 'figures/diags/'
 
     # data
     npydir = maindir + 'data/npy/number_distribution/'
@@ -88,3 +88,27 @@ if __name__ == '__main__':
 
     # time match pm10 and N_r_obs
     N_r_obs, pm10_obs = eu.time_match_datasets(N_r_obs_raw, pm10_obs_raw)
+
+    # create aerFO equation curves to overplot onto the scatter plots
+    q_aer_ug_kg = np.arange(0, 90)
+    q_aer_kg_kg = q_aer_ug_kg * 1e-9
+    m0 = FOcon.m0_aer_urban
+    p = FOcon.p_aer
+    r0 = FOcon.r0_urban
+
+    N_aer = FOcon.N0_aer_urban * np.power((q_aer_kg_kg / m0), 1.0 - (3.0 * p))
+    r_md = r0 * np.power((q_aer_kg_kg / m0), p)
+
+    plt.figure()
+    plt.scatter(pm10_obs['pm_10'], N_r_obs['Dv_accum']/2 ,s=2)
+    plt.plot(pm10_obs['pm_10'], r_md * 1e6, '--', colour='grey', alpha=0.7)
+    plt.xlabel('pm10 [microgram m-3]')
+    plt.ylabel('volume radius [nm]')
+    plt.savefig(savedir + 'r_accum_vs_pm10_NK_2014-2015.png')
+
+    plt.figure()
+    plt.scatter(pm10_obs['pm_10'], N_r_obs['Ntot_accum'] / 2, s=2)
+    plt.plot(pm10_obs['pm_10'], N_aer *1e6, '--', colour='grey', alpha=0.7)
+    plt.xlabel('pm10 [microgram m-3]')
+    plt.ylabel('Ntot (accum) [cm-3]')
+    plt.savefig(savedir + 'N_accum_vs_pm10_NK_2014-2015.png')
