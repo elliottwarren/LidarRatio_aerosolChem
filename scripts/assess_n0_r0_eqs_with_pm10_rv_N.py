@@ -3,26 +3,88 @@ Assess the early equations in the aerFO that estiamte N and r from N0 and r0 res
 overestimation in /beta_m by the aerFO...
 """
 
-
-
 # read in pm10
 # read in rv and N
 # calculate aerFO rv and N from the equations (dashed lines)
 # plot all together
 
-
 import matplotlib.pyplot as plt
 from matplotlib.dates import DateFormatter
-import pickle
 from scipy.stats import pearsonr
 
 import numpy as np
 import datetime as dt
 import pandas
+from dateutil import tz
 
-from copy import deepcopy
-import colorsys
 
 import ellUtils as eu
 from forward_operator import FOUtils as FO
 from forward_operator import FOconstants as FOcon
+
+def read_pm10_obs(aer_fname):
+
+    pm10_obs = {}
+    from_zone = tz.gettz('GMT')
+    to_zone = tz.gettz('UTC')
+
+    raw_aer = np.genfromtxt(aer_fname, delimiter=',', skip_header=5, dtype="|S20")
+
+    # sort out times as they are in two columns
+    rawtime = [i[0] + ' ' + i[1].replace('24:00:00', '00:00:00') for i in raw_aer]
+    time_endHr = np.array([dt.datetime.strptime(i, '%d/%m/%Y %H:%M:%S') for i in rawtime])
+    # convert from GMT to UTC and remove the timezone afterwards
+    time_endHr = np.array([i.replace(tzinfo=from_zone) for i in time_endHr]) # label time as 'GMT'
+    pro_time = np.array([i.astimezone(to_zone) for i in time_endHr]) # find time as 'UTC'
+    pro_time = np.array([i.replace(tzinfo=None) for i in pro_time]) # remove 'UTC' timezone identifier
+
+    # extract obs and time together as a dictionary entry for the site.
+    pm10_obs = {'pm_10': np.array([np.nan if i == 'No data' else i for i in raw_aer[:, 2]], dtype=float),
+                'time': pro_time}
+
+    return pm10_obs
+
+
+
+if __name__ == '__main__':
+
+    # -----------------------------
+    # Setup
+    # -----------------------------
+
+    # directories
+    maindir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/'
+    datadir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/'
+    pm10dir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/DEFRA/'
+    savedir = maindir + 'figures/number_concentration/'
+
+    # data
+    npydir = maindir + 'data/npy/number_distribution/'
+
+    # year of data
+    # for NK - only got 2014 and 2015 with APS data
+    years = ['2014']
+    year = years[0]
+    # years = [str(i) for i in range(2014, 2017)]
+
+
+    # -----------------------
+    # Read
+    # -----------------------
+
+    # read in pm10 data
+    aer_fname = pm10dir + 'PM10_Hr_NK_DEFRA_AURN_01012014-31122015.csv'
+    pm10_obs_raw = read_pm10_obs(aer_fname)
+
+    # read in N and r
+    y_data = []
+    for year in ['2014', '2015']:
+        N_r_fname = npydir+'accum_Ntot_Dv_NK_APS_SMPS_'+year+'.npy'
+        y_data += [(np.load(N_r_fname).flat[0])]
+    # merge N and r yearly data together
+    N_r_obs_raw = {}
+    for key, item in y_data[0].iteritems():
+        N_r_obs_raw[key] = np.append(y_data[0][key], y_data[1][key])
+
+    # time match pm10 and N_r_obs
+    N_r_obs, pm10_obs = eu.time_match_datasets(N_r_obs_raw, pm10_obs_raw)
