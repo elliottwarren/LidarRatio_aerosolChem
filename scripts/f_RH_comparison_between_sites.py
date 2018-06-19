@@ -9,7 +9,6 @@ import numpy as np
 import ellUtils as eu
 import matplotlib.pyplot as plt
 import pickle
-from netCDF4 import Dataset
 import datetime as dt
 
 # Reading
@@ -60,13 +59,13 @@ if __name__ == '__main__':
     # ---------------------------------------------------
 
     # RH
-    RH_path = datadir + 'WXT_KSSW_'+str(year)+'_15min.nc'
-    RH_obs = eu.netCDF_read(RH_path)
+    #RH_path = datadir + 'WXT_KSSW_'+str(year)+'_15min.nc'
+    #RH_obs = eu.netCDF_read(RH_path)
 
     # N(D) #use the Dn_accum.
     N_path = N_dir + 'accum_Ntot_Dn_NK_SMPS_'+str(year)+'.npy'
     N = np.load(N_path).flat[0]
-    r_acumm_m = N['Dn_accum'] / 2 / 1e9 # conv. to [m] from [nm]
+    r_accum_m = N['Dn_accum'] / 2 / 1e9 # conv. to [m] from [nm]
 
     # f(RH) read in
     f_RH_data = {}
@@ -75,7 +74,7 @@ if __name__ == '__main__':
 
     for site in ['NK', 'Ch', 'Ha']:
 
-        # read in f(RH) for each site
+        # read in f(RH) LUTs for each site
         path = fRHdir + dataRes + '_f(RH)_' + site + '_905.0nm.nc'
 
         # eu.netCDF_info(path)
@@ -117,6 +116,11 @@ if __name__ == '__main__':
     lower_percentile = np.round(np.percentile(data_hist, 33) * 100.0)
     upper_percentile = np.round(np.percentile(data_hist, 66) * 100.0)
 
+    # check sample size in each f_RH set
+    n = {}
+    for site in ['NK', 'Ch', 'Ha']:
+        idx = np.where(~np.isnan(f_RH_data[site][:, 1, 0]))[0]
+        n[site] = int(idx.shape[0])
     # ---------------------------------------------------
     # Plotting
     # ---------------------------------------------------
