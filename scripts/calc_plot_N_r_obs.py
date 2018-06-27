@@ -18,7 +18,6 @@ Dv = volume mean diameter
 
 import matplotlib.pyplot as plt
 from matplotlib.dates import DateFormatter
-import pickle
 from scipy.stats import pearsonr
 
 import numpy as np
@@ -26,11 +25,8 @@ import datetime as dt
 import pandas
 
 from copy import deepcopy
-import colorsys
 
 import ellUtils as eu
-from forward_operator import FOUtils as FO
-from forward_operator import FOconstants as FOcon
 
 
 # Reading and reformatting
@@ -286,8 +282,6 @@ def read_routine_aps(filepath_aps, year, met_vars):
     # create array ready to be filled
     headers_shrink = np.empty(N['binned'].shape)
     headers_shrink[:] = np.nan
-
-
 
     for t_idx, t in enumerate(N['time']):
 
@@ -929,11 +923,12 @@ def merge_small_large_dNdlogD(small_dNdlogD, large_dNdlogD, timeRes=60):
     large_dNdlogD['dlogD'] = large_dNdlogD['dlogD'][:, large_idx]
     large_dNdlogD['logD'] = large_dNdlogD['logD'][:, large_idx]
     large_dNdlogD['binned'] = large_dNdlogD['binned'][:, large_idx]
+    large_dNdlogD['dN'] = large_dNdlogD['dN'][:, large_idx]
 
     # binned shape = [time, bin]
     dNdlogD = {'time': time_range}
     # prepare dNdlogD ready with the different arrays, ready to be filled
-    for param in ['binned', 'D', 'dD', 'dlogD', 'logD']:
+    for param in ['binned', 'dN', 'D', 'dD', 'dlogD', 'logD']:
         dNdlogD[param] = np.empty([len(time_range), len(small_dNdlogD['D']) + len(large_idx)])
         dNdlogD[param][:] = np.nan
     del large_idx  # cleanup as its used lower down
@@ -968,6 +963,11 @@ def merge_small_large_dNdlogD(small_dNdlogD, large_dNdlogD, timeRes=60):
 
             # create mean of all data within the time period and store
             dNdlogD['binned'][t_idx, D_idx] = np.nanmean(small_dNdlogD['binned'][small_idx, D_idx])
+            dNdlogD['dN'][t_idx, D_idx] = np.nanmean(small_dNdlogD['dN'][small_idx, D_idx])
+
+            # create mean of diameter bins here if it needs drying/swelling
+            # remove instant placement of sizes from creation of dNdlogD before t loop
+            # --- place holder ---
 
         # -------------
 
@@ -986,10 +986,20 @@ def merge_small_large_dNdlogD(small_dNdlogD, large_dNdlogD, timeRes=60):
 
             # create mean of all data within the time period and store
             dNdlogD['binned'][t_idx, D_binned_idx] = np.nanmean(large_dNdlogD['binned'][large_idx, D_idx])
+            dNdlogD['dN'][t_idx, D_binned_idx] = np.nanmean(large_dNdlogD['dN'][large_idx, D_idx])
 
             # Create mean of all the large ins. diameter variables as these are also now time varying with RH
             for param in ['D', 'dD', 'dlogD', 'logD']:
                 dNdlogD[param][t_idx, D_binned_idx] = np.nanmean(large_dNdlogD[param][large_idx, D_idx])
+
+    # set all diameters to nan if any one of them are nan
+    # location of nans will only be different between D and 'binned', all diameter variables will have the same missing
+    #   idx positions
+    a = np.array([any(np.isnan(row)) for row in dNdlogD['binned']]) # large particle sizes are missing for 6 mnth 2014
+    b = np.array([any(np.isnan(row)) for row in dNdlogD['D']]) # missing due to missing RH
+    bad = np.logical_or(a == True, b == True)
+    for param in ['binned', 'dN', 'D', 'dD', 'dlogD', 'logD']:
+        dNdlogD[param][bad, :] = np.nan
 
     # keep the index position of the original instruments D, within the combined D range
     small_D_idx = np.arange(small_dNdlogD['D'].shape[-1])
@@ -1011,13 +1021,13 @@ def get_size_range_idx(D, D_min, D_max):
 
     """
 
-    accum_minD, accum_minD_idx, _ = eu.nearest(D, D_min)
-    accum_maxD, accum_maxD_idx, _ = eu.nearest(D, D_max)
-    accum_range_idx = range(accum_minD_idx, accum_maxD_idx + 1)
+    # ensure range_idx dtype=int for use as an index
+    accum_minD_idx = np.array([eu.nannearest(D[t,:], D_min)[1] for t in range(D.shape[0])]) # .shape[0] = time dimension
+    accum_maxD_idx = np.array([eu.nannearest(D[t, :], D_max)[1] for t in range(D.shape[0])])
+    accum_range_idx = [np.arange(min_idx, max_idx+1, dtype=int) for min_idx, max_idx in zip(accum_minD_idx, accum_maxD_idx)]
 
-    # define fine and coarse ranges here, so the idx edge between modes do not overlap
-    fine_range_idx = range(0, accum_minD_idx)
-    coarse_range_idx = range(accum_maxD_idx + 1, len(D))
+    fine_range_idx = [np.arange(0, min_idx, dtype=int) for min_idx in accum_minD_idx]
+    coarse_range_idx = [np.arange(max_idx+1, D.shape[1], dtype=int) for max_idx in accum_maxD_idx] # .shape[1] = diameter dimension
 
     return fine_range_idx, accum_range_idx, coarse_range_idx
 
@@ -1052,15 +1062,15 @@ def calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D
     Dg[:] = np.nan # 2nd part of eqn for Dv
 
     # Get volume mean diameter
-    for t in range(len(dNdD['time'])):
+    for t, size_range_idx_t in enumerate(size_range_idx):
 
         # 1. Volume mean diameter
         # calculate two parts of the eq. first
         # # dNdlogD * dlogD * D = N of original bin
         # 1/6 * pi * D**3 = V (volume sphere)
         #   below = sum(V * D) / sum(V)
-        x1 = dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx] * (D[size_range_idx] ** 4.0)  # V * D
-        y1 = dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx] * (D[size_range_idx] ** 3.0)  # just V
+        x1 = dNdlogD['binned'][t, size_range_idx_t] * dlogD[t, size_range_idx_t] * (D[t, size_range_idx_t] ** 4.0)  # V * D
+        y1 = dNdlogD['binned'][t, size_range_idx_t] * dlogD[t, size_range_idx_t] * (D[t, size_range_idx_t] ** 3.0)  # just V
 
         # once all bins for time t have been calculated, sum them up
         Dv[t] = np.sum(x1)/np.sum(y1)
@@ -1070,8 +1080,8 @@ def calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D
         # dNdlogD * dlogD * D = N of original bin
         #   -> sum(N * D) / sum(N) = number mean
 
-        x2 = dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx] * D[size_range_idx] # N* D
-        y2 = dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx]
+        x2 = dNdlogD['binned'][t, size_range_idx_t] * dlogD[t, size_range_idx_t] * D[t, size_range_idx_t] # N* D
+        y2 = dNdlogD['binned'][t, size_range_idx_t] * dlogD[t, size_range_idx_t]
 
         Dn[t] = np.sum(x2)/np.sum(y2)
 
@@ -1080,14 +1090,14 @@ def calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D
         # source 1: CMD or Dg:
         #    http://www.tsi.com/uploadedFiles/_Site_Root/Products/Literature/Application_Notes/PR-001-RevA_Aerosol-Statistics-AppNote.pdf
         # source 2: section 1.3: http://eodg.atm.ox.ac.uk/user/grainger/research/aerosols.pdf
-        x3 = D[size_range_idx] ** (dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx]) #[D1**n1, D2**n2 ...] (TSI notes)
-        y3 = dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx] # [n1, n2 ... nN]
+        x3 = D[t, size_range_idx_t] ** (dNdlogD['binned'][t, size_range_idx_t] * dlogD[t, size_range_idx_t]) #[D1**n1, D2**n2 ...] (TSI notes)
+        y3 = dNdlogD['binned'][t, size_range_idx_t] * dlogD[t, size_range_idx_t] # [n1, n2 ... nN]
 
         Dg[t] = np.prod(x3) ** (1.0/np.sum(y3))
 
 
     return Dv, Dn
-
+                                      # accum_range_idx, dNdD, dNdlogD, dlogD, D, units='nm'
 def calc_geometric_mean_and_stdev_radius(size_range_idx, dNdD, dNdlogD, dlogD, D, units='nm'):
 
     """
@@ -1120,16 +1130,16 @@ def calc_geometric_mean_and_stdev_radius(size_range_idx, dNdD, dNdlogD, dlogD, D
         r = D/2.0
 
         # bin max -> the bin + half way to the next bin
-        r_diffs = r[1:] - r[:-1]  # checked
-        r_max = r[:-1] + (r_diffs / 2.0)  # checked
+        r_diffs = r[:, 1:] - r[:, :-1]  # checked
+        r_max = r[:, :-1] + (r_diffs / 2.0)  # checked
 
         # upper edge difference for the last bin is assumed be equal to the upper edge difference of the second to last bin
         #   therefore add the upper edge difference of the second to last bin, to the last bin.
-        r_max = np.append(r_max, r[-1] + (r_diffs[-1] / 2.0))  # checked
+        r_max = np.hstack((r_max, (r[:, -1] + (r_diffs[:, -1] / 2.0))[:, None])) # checked
         # lower edge difference for the first bin is assumed to be equal to the lower edge difference of the second bin,
         #   therefore subtract the lower edge difference of the second bin, from the first bin.
         # lower edge of subsequent bins = upper edge of the previous bin, hence using r_max[:-1]
-        r_min = np.append(r[0] - (r_diffs[0] / 2.0), r_max[:-1])  # checked
+        r_min = np.hstack(((r[:, 0] - (r_diffs[:, 0] / 2.0))[:, None], r_max[:, :-1]))  # checked
 
         # bin parameters
         logr = np.log10(r)
@@ -1154,46 +1164,60 @@ def calc_geometric_mean_and_stdev_radius(size_range_idx, dNdD, dNdlogD, dlogD, D
     stdev_g_r = np.empty(len(dNdlogD['time']))
     stdev_g_r[:] = np.nan
 
-    for t in range(len(dNdD['time'])):
+    for t, size_range_idx_t in enumerate(size_range_idx):
+        # 1. Gemoetric number mean diameter
+        # source 1: CMD or Dg:
+        #    http://www.tsi.com/uploadedFiles/_Site_Root/Products/Literature/Application_Notes/PR-001-RevA_Aerosol-Statistics-AppNote.pdf
+        # source 2: section 1.3: http://eodg.atm.ox.ac.uk/user/grainger/research/aerosols.pdf
+        x1 = dNdlogD['binned'][t, size_range_idx_t] * dlogD[t, size_range_idx_t] # [n1, n2 ... nN] (particles in each bin)
+        # NOTE: x1 can result as an empty array, and np.sum([]) = 0.0, which would then be passed on without error!
+        if x1.size == 0:
+            x1 = np.nan
+        x2 = (1.0 / np.sum(x1))  # 1/N (1/ total number of particles across all bins)
+
+        # [(D1**(n1*1/N), (D2**(n2*1/N) ...] (rearanged eq from TSI notes as otherwise the computer cant store the number properly!)
+        # x3 = (D[t, size_range_idx_t] ** ((dNdlogD['binned'][t, size_range_idx_t] * dlogD[t, size_range_idx_t]) * x2))
+        x3 = (D[t, size_range_idx_t] ** (x1 * x2))
+        if x3.size == 0:
+            x3 = np.nan
+
+        # geometric mean diameter
+        Dg = np.prod(x3)
+
+        # geometric mean radius
+        r_g[t] = Dg / 2.0
 
         # # 1. Gemoetric number mean diameter
         # # source 1: CMD or Dg:
         # #    http://www.tsi.com/uploadedFiles/_Site_Root/Products/Literature/Application_Notes/PR-001-RevA_Aerosol-Statistics-AppNote.pdf
         # # source 2: section 1.3: http://eodg.atm.ox.ac.uk/user/grainger/research/aerosols.pdf
-        # x1 = dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx] # [n1, n2 ... nN]
+        # x1 = dNdlogr[t, size_range_idx_t] * dlogr[t, size_range_idx_t] # [n1, n2 ... nN]
         # x2 = (1.0 / np.sum(x1))  # 1/N
         #
         # # [(D1**(n1*1/N), (D2**(n2*1/N) ...] (rearanged eq from TSI notes as otherwise the computer cant store the number properly!)
-        # x3 = (D[size_range_idx] ** ((dNdlogD['binned'][t, size_range_idx] * dlogD[size_range_idx]) * x2))
+        # x3 = (r[t, size_range_idx_t] ** ((dNdlogr[t, size_range_idx_t] * dlogr[t, size_range_idx_t]) * x2))
         #
         # # geometric mean diameter
-        # Dg = np.prod(x3)
-        #
-        # # geometric mean radius
-        # r_g[t] = Dg / 2.0
-
-        # 1. Gemoetric number mean diameter
-        # source 1: CMD or Dg:
-        #    http://www.tsi.com/uploadedFiles/_Site_Root/Products/Literature/Application_Notes/PR-001-RevA_Aerosol-Statistics-AppNote.pdf
-        # source 2: section 1.3: http://eodg.atm.ox.ac.uk/user/grainger/research/aerosols.pdf
-        x1 = dNdlogr[t, size_range_idx] * dlogr[size_range_idx] # [n1, n2 ... nN]
-        x2 = (1.0 / np.sum(x1))  # 1/N
-
-        # [(D1**(n1*1/N), (D2**(n2*1/N) ...] (rearanged eq from TSI notes as otherwise the computer cant store the number properly!)
-        x3 = (r[size_range_idx] ** ((dNdlogr[t, size_range_idx] * dlogr[size_range_idx]) * x2))
-
-        # geometric mean diameter
-        r_g[t] = np.prod(x3)
+        # r_g[t] = np.prod(x3)
 
 
         # 2. Geometric standard deviation
         #   same sources as above
-        y1 = (dNdlogr[t, size_range_idx] * dlogr[size_range_idx]) * ((logr[size_range_idx] - np.log10(r_g[t])) ** 2.0) # Ni * (diff in r from mean)**2
+        y1 = (dNdlogr[t, size_range_idx_t] * dlogr[t, size_range_idx_t]) * ((logr[t, size_range_idx_t] - np.log10(r_g[t])) ** 2.0) # Ni * (diff in r from mean)**2
+        if y1.size == 0:
+            y1 = np.nan
 
-        y2 = np.sum(dNdlogr[t, size_range_idx] * dlogr[size_range_idx]) - 1 # N - 1
+        y2 = dNdlogr[t, size_range_idx_t] * dlogr[t, size_range_idx_t]
+        if y2.size == 0:
+            y2 = np.nan
+        y3 = np.sum(y2) - 1 # N - 1
+
+        # y2 = np.sum(dNdlogr[t, size_range_idx_t] * dlogr[t, size_range_idx_t]) - 1 # N - 1
+        # if y2.size == 0:
+        #     y2 = np.nan
 
         # as the data uses log10, use that base to recover stdev_g_r
-        stdev_g_r[t] = 10 ** ((np.sum(y1) / y2) ** 0.5)
+        stdev_g_r[t] = 10 ** ((np.sum(y1) / y3) ** 0.5)
 
     return r_g, stdev_g_r
 
@@ -1608,7 +1632,7 @@ if __name__ == '__main__':
 
     # year of data
     # for NK - only got 2014 and 2015 with APS data
-    years = ['2015']
+    years = ['2014']
     year = years[0]
     # years = [str(i) for i in range(2014, 2017)]
 
@@ -1764,6 +1788,7 @@ if __name__ == '__main__':
 
         # calc dNdlogD from N, for aps data
         smps_dNdlogD = calc_dNdlogD_from_N_smps(smps_N)
+        smps_dNdlogD['dN'] = smps_N['binned']
 
     # ------------------------------------------
     # Larger size ranges
@@ -1808,6 +1833,7 @@ if __name__ == '__main__':
 
             # calc dNdlogD from N, for aps data (coarse)
             aps_dNdlogD = calc_dNdlogD_from_N_general(aps_N)
+            aps_dNdlogD['dN'] = aps_N['binned']
 
 
     # -----------------------------------------------------------------------
@@ -1919,30 +1945,32 @@ if __name__ == '__main__':
     dNdlogD['Ntot'][:] = np.nan
     dNdlogD['Ntot_accum'] = np.empty(len(dNdlogD['time']))
     dNdlogD['Ntot_accum'][:] = np.nan
+    dNdlogD['Ntot_fine'] = np.empty(len(dNdlogD['time']))
+    dNdlogD['Ntot_fine'][:] = np.nan
+    dNdlogD['Ntot_coarse'] = np.empty(len(dNdlogD['time']))
+    dNdlogD['Ntot_coarse'][:] = np.nan
 
     # --------------------------------------
 
     # calc dN/dD (n_N(Dp)) from dN/dlogD: Seinfeld and Pandis 2007 eqn 8.18
-    for i, D_i in enumerate(D):
-        # key = str(D_i)  # key for dictionary
+    for i, D_i in enumerate(list(D.transpose())):
 
-        logD_i = logD[i]
+        logD_i = logD[:, i]
+        dD_i = dD[:, i]
 
         # dNdD[key] = dNdlogD[key] / (2.303 * D_i)  # calc nN(D) from nN(dlogD)
         dNdD['binned'][:, i] = dNdlogD['binned'][:, i] / (2.303 * D_i)  # calc nN(D) from nN(dlogD)
 
+        # Calc dN from dN/dD(Actual number of particles per bin)
+        dN['binned'][:, i] = dNdD['binned'][:, i] * dD_i
 
         # -----------------------------------------------------------------------
-        # calc dV/dD from dN/dD (eqn 8.6)
+        # Calc dV/dD from dN/dD (eqn 8.6)
         dVdD['binned'][:, i] = (np.pi / 6.0) * (D_i ** 3.0) * dNdD['binned'][:, i]
 
-        # calc dV/dlogD from dN/dlogD (eqn 8.6)
+        # Calc dV/dlogD from dN/dlogD (eqn 8.6)
         dVdlogD['binned'][:, i] = (np.pi / 6.0) * (D_i ** 3.0) * dNdlogD['binned'][:, i]
 
-    # calc dN from dN/dD(Actual number of particles per bin)
-    for i, dD_i in enumerate(dD):
-
-        dN['binned'][:, i] = dNdD['binned'][:, i] * dD_i
 
     # Calculate the volume and number mean diameters for 0 - 2.5 micron range (Dv and Dn respectively)
     # Get size range
@@ -1983,8 +2011,8 @@ if __name__ == '__main__':
 
         # total_dN += [dNdD[key][t]]  # turn dN/dD into dN (hopefully)
         # total_dV += [dVdD[key][t]]  # just dV/dD data
-        x4 = dNdlogD['binned'][t, :] * dlogD * (D ** 4.0)  # turn dN/dD into dN (hopefully)
-        y3 = dNdlogD['binned'][t, :] * dlogD * (D ** 3.0)  # just dV/dD data
+        x4 = dNdlogD['binned'][t, :] * dlogD[t, :] * (D[t, :] ** 4.0)  # turn dN/dD into dN (hopefully)
+        y3 = dNdlogD['binned'][t, :] * dlogD[t, :] * (D[t, :] ** 3.0)  # just dV/dD data
 
         # once all bins for time t have been calculated, sum them up
         dNdlogD['Dv'][t] = np.sum(x4)/np.sum(y3)
@@ -2002,7 +2030,7 @@ if __name__ == '__main__':
     # paper 1 accum radii range: 40 - 700 nm - ClearfLo
     # using dV/dlogD for NK (2015) diameter range: 80 - 1000 nm
     D_min_accum = 80.0
-    D_max_accum = 1000.0
+    D_max_accum = 700.0
 
     # get the idx for each range
     fine_range_idx, accum_range_idx, coarse_range_idx = get_size_range_idx(D, D_min_accum, D_max_accum)
@@ -2010,19 +2038,45 @@ if __name__ == '__main__':
     # calculate the mean volume and mean number diameter
     dNdlogD['Dv_accum'], dNdlogD['Dn_accum'] = calc_volume_and_number_mean_diameter(accum_range_idx, dNdD, dNdlogD, dlogD, D)
     dNdlogD['Dv_fine'], dNdlogD['Dn_fine'] = calc_volume_and_number_mean_diameter(fine_range_idx, dNdD, dNdlogD, dlogD, D)
-    # dNdlogD['Dv_coarse'], dNdlogD['Dn_coarse'] = calc_volume_and_number_mean_diameter(coarse_range_idx, dNdD, dNdlogD, dlogD, D)
+    dNdlogD['Dv_coarse'], dNdlogD['Dn_coarse'] = calc_volume_and_number_mean_diameter(coarse_range_idx, dNdD, dNdlogD, dlogD, D)
 
     # Get total number of particles (eqn 8.9)
-    dNdlogD['Ntot_accum'] = np.sum(dNdlogD['binned'][:, accum_range_idx] * dlogD[None, accum_range_idx], axis=1)
-    dNdlogD['Ntot_fine'] = np.sum(dNdlogD['binned'][:, fine_range_idx] * dlogD[None, fine_range_idx], axis=1)
-    # dNdlogD['Ntot_coarse'] = np.sum(dNdlogD['binned'][:, coarse_range_idx] * dlogD[None, coarse_range_idx], axis=1)
+    for t, accum_range_idx_t in enumerate(accum_range_idx):
+        dNdlogD['Ntot_accum'][t] = np.sum(dNdlogD['binned'][t, accum_range_idx_t] * dlogD[t, accum_range_idx_t])
+        # dNdlogD['Ntot_accum'][t] = np.sum(dNdlogD['dN'][t, accum_range_idx_t]) # same values as above
+    for t, fine_range_idx_t in enumerate(fine_range_idx):
+        dNdlogD['Ntot_fine'][t] = np.sum(dNdlogD['binned'][t, fine_range_idx_t] * dlogD[t, fine_range_idx_t])
+    for t, coarse_range_idx_t in enumerate(coarse_range_idx):
+        dNdlogD['Ntot_coarse'][t] = np.sum(dNdlogD['binned'][t, coarse_range_idx_t] * dlogD[t, coarse_range_idx_t])
+    dNdlogD['Ntot_accum'][dNdlogD['Ntot_accum'] == 0.0] = np.nan
+    dNdlogD['Ntot_fine'][dNdlogD['Ntot_fine'] == 0.0] = np.nan
+    dNdlogD['Ntot_coarse'][dNdlogD['Ntot_coarse'] == 0.0] = np.nan
+
+    # # Get total number of particles (eqn 8.9)
+    # dNdlogD['Ntot_accum'] = np.sum(dNdlogD['binned'][:, accum_range_idx] * dlogD[None, accum_range_idx], axis=1)
+    # dNdlogD['Ntot_fine'] = np.sum(dNdlogD['binned'][:, fine_range_idx] * dlogD[None, fine_range_idx], axis=1)
+    # # dNdlogD['Ntot_coarse'] = np.sum(dNdlogD['binned'][:, coarse_range_idx] * dlogD[None, coarse_range_idx], axis=1)
 
     dNdlogD['Ntot'] = np.sum(dNdlogD['binned'] * dlogD[None, :], axis=1)
 
     # np.nanmean(dNdlogD['Ntot_accum'])
 
     # calculate the geometric mean and geometric standard deviation of the radius
-    dNdlogD['r_g'], dNdlogD['stdev_g_r'] = calc_geometric_mean_and_stdev_radius(accum_range_idx, dNdD, dNdlogD, dlogD, D, units='nm')
+    dNdlogD['r_g'], dNdlogD['stdev_g_r'] = calc_geometric_mean_and_stdev_radius(accum_range_idx, dNdD, dNdlogD,
+                                                                                dlogD, D, units='nm')
+    dNdlogD['r_g_coarse'], dNdlogD['stdev_g_r_coarse'] = calc_geometric_mean_and_stdev_radius(coarse_range_idx, dNdD, dNdlogD,
+                                                                                dlogD, D, units='nm')
+    dNdlogD['r_g_fine'], dNdlogD['stdev_g_r_fine'] = calc_geometric_mean_and_stdev_radius(fine_range_idx, dNdD, dNdlogD,
+                                                                                dlogD, D, units='nm')
+    # ------
+    # 2014 NK
+    # np.nanmean(dNdlogD['r_g']) = 64.81 nm
+    # np.nanmean(dNdlogD['r_g_fine']) = 18.82 nm
+    # np.nanmean(dNdlogD['r_g_coarse']) = 537.88 nm
+    # np.nanmean(dNdlogD['stdev_g_r']) = 1.48
+    # np.nanmean(dNdlogD['stdev_g_r_fine']) = 1.49
+    # np.nanmean(dNdlogD['stdev_g_r_coarse']) = 5448.48 (the diameter range needs constraining, atm it goes from accum max to APS max)
+    # ------
 
     # # statistics and plots on r_g and stdev_g_r
     # quick_plot_r_g(dNdlogD, D_min, D_max, site_meta, savestr)
@@ -2052,7 +2106,8 @@ if __name__ == '__main__':
     # save time, Dv and N as a pickle
     np_save_data = {'time': dNdlogD['time'], 'Ntot': dNdlogD['Ntot'],
                    'Dv_accum': dNdlogD['Dv_accum'], 'Ntot_accum': dNdlogD['Ntot_accum'],
-                   'Dv_fine': dNdlogD['Dv_fine'], 'Ntot_fine': dNdlogD['Ntot_fine']}
+                   'Dv_fine': dNdlogD['Dv_fine'], 'Ntot_fine': dNdlogD['Ntot_fine'],
+                   'accum_range': [D_min_accum, D_max_accum]}
     np.save(npydir + 'accum_Ntot_Dv_'+savestr+'_'+year+'.npy', np_save_data)
     print (npydir + 'Ntot_Dv_fine_accum_'+savestr+'_'+year+'.npy saved!')
 
