@@ -38,16 +38,20 @@ def create_statistics():
                        'aer_diff': [],
                        'aer_diff_normalsed_aer_obs': [],
                        'aer_mod': [],
+
                         'N_fine': [],
                         'N_accum': [],
                         'N_coarse': [],
                         'r_fine': [],
                         'r_accum': [],
                         'r_coarse': [],
+
                        'aer_obs': [],
+                       'aerosol_concentration_dry_air': [],
                        'rh_diff': [],
                        'rh_mod': [],
                        'rh_obs': [],
+
                        'back_diff_log': [],
                        'back_diff_norm': [],
                        'back_diff_norm_normalised_back_obs': [],
@@ -142,9 +146,12 @@ def build_statistics(statistics, mod_data, bsc_obs, pm10_obs, mod_height_idx, ce
         statistics['N_coarse'] += list(mod_data['coarse']['N'])
         statistics['r_coarse'] += list(mod_data['coarse']['r_md'])
 
-    #murk_i = mod_data['aerosol_concentration_dry_air'][:, 0]  # 0th height = 5 m [micro g m-3]
-    pm10_i = pm10_obs['pm_10']
-    rh_mod = mod_data['RH'][:, mod_height_idx]
+    if 'aerosol_concentration_dry_air' in mod_data:
+        murk_i = mod_data['aerosol_concentration_dry_air'][:, 0]  # 0th height = 5 m [micro g m-3]
+        statistics['aer_mod'] += list(murk_i)
+
+    pm10_i = pm10_obs['pm_10'] # [micro g m-3]
+    rh_mod = mod_data['RH'][:, mod_height_idx] # [%]
 
     statistics['back_obs'] += list(obs_back_i)
     statistics['back_mod'] += list(mod_back_i)
@@ -157,7 +164,6 @@ def build_statistics(statistics, mod_data, bsc_obs, pm10_obs, mod_height_idx, ce
     statistics['abs_back_diff_log'] += list(np.abs(np.log10(mod_back_i) - np.log10(obs_back_i)))
 
     statistics['aer_obs'] += list(pm10_i)
-    #statistics['aer_mod'] += list(murk_i)
     statistics['rh_mod'] += list(rh_mod)
 
     #statistics['aer_diff'] += list(murk_i - pm10_i)
@@ -187,12 +193,6 @@ if __name__ == '__main__':
     modDatadir = datadir + model_type + '/'
     aerDatadir = datadir + 'LAQN/'
 
-    # # pm10
-    site = 'NK'
-    ceil_id = 'CL31-D'
-    ceil = ceil_id + '_' + site
-    site_bsc = {ceil: FOcon.site_bsc[ceil]}
-
     # wavelength (int) [nm]
     ceil_lambda_nm = 905
 
@@ -204,7 +204,7 @@ if __name__ == '__main__':
 
     # NK CTRL - all clear sky days for paper 2
     # CL31-D days '20160504', '20160505', '20160506'
-    #daystrList = ['20160823','20160911','20161102','20161125','20161129','20161130','20161204','20161205','20161227','20161229',
+    # daystrList = ['20160823','20160911','20161102','20161125','20161129','20161130','20161204','20161205','20161227','20161229',
     #    '20170105','20170117','20170118','20170119','20170120','20170121','20170122','20170325','20170330','20170408','20170429',
     #    '20170522','20170524','20170526','20170601','20170614','20170615','20170619','20170620','20170626','20170713','20170717',
     #    '20170813','20170827','20170828','20170902']
@@ -239,7 +239,8 @@ if __name__ == '__main__':
 
     # type of model evaluation and save string
     # eval_type = 'CTRL'
-    aer_run = 'run3'
+    aer_run_number = 3
+    aer_run = 'run'+str(aer_run_number)
 
     # argumets for aerFO based on run type
     if aer_run == 'run1': # CTRL
@@ -253,6 +254,23 @@ if __name__ == '__main__':
         kwargs = {'obs_N': True, 'obs_r': True}
         aer_modes = ['fine', 'accum']
         eval_type = 'obs_N_obs_r_fine_accum'
+    elif aer_run == 'run4': # N and r (accum range)
+        kwargs = {'obs_N': True, 'obs_r': True}
+        aer_modes = ['fine', 'accum', 'coarse']
+        eval_type = 'obs_N_obs_r_fine_accum_coarse'
+    elif aer_run == 'run6':
+        kwargs = {'obs_N': True, 'obs_r': True, 'use_S_hourly': True}
+    aer_modes = ['accum']
+
+
+    # ceilometer
+    if aer_run_number == 1:
+        ceil_id = 'CL31-E'
+    else:
+        ceil_id = 'CL31-D'
+    site = 'NK'
+    ceil = ceil_id + '_' + site
+    site_bsc = {ceil: FOcon.site_bsc[ceil]}
 
     savestr = site + '_' + eval_type + '_' +aer_run + '.npy'
 
@@ -304,9 +322,13 @@ if __name__ == '__main__':
         # mod_data = FO.mod_site_extract_calc(day, ceil_data_i, modDatadir, model_type, res, 905, version=version,
         #                 allvars=True, fullForecast=False, obs_RH=True, **kwargs)
 
-        # run 2 - obs N and r (accum) (and obs RH so its a fair comparison with the control run)
-        mod_data = {'NK':FO.forward_operator_from_obs(day, ceil_lambda_nm, version=version,
-                        allvars=True, fullForecast=False, aer_modes=aer_modes, obs_RH=True, **kwargs)}
+        if aer_run_number == 1:
+            mod_data = FO.mod_site_extract_calc(day, ceil_data_i, modDatadir, model_type, res, 905, version=version,
+                            allvars=True, fullForecast=False, obs_RH=True, **kwargs)
+        else:
+            # run 2+ - obs N and r(and obs RH so its a fair comparison with the control run)
+            mod_data = {'NK':FO.forward_operator_from_obs(day, ceil_lambda_nm, version=version,
+                            allvars=True, fullForecast=False, aer_modes=aer_modes, obs_RH=True, **kwargs)}
 
         # # run 2 - obs N and r (accum) (and obs RH so its a fair comparison with the control run)
         # mod_data = {'NK':FO.forward_operator_from_obs(day, ceil_lambda_nm, version=version,
@@ -352,10 +374,10 @@ if __name__ == '__main__':
     # ---------------------------
 
     # save the statistics
-    # save_dict = {'statistics': statistics, 'cases': days_iterate, 'site': site, 'ceil': ceil,
-    #              'ceil_lambda_nm': ceil_lambda_nm}
-    # np.save(npysavedir + savestr, save_dict)
-    # print 'data saved!: ' + npysavedir + savestr
+    save_dict = {'statistics': statistics, 'cases': days_iterate, 'site': site, 'ceil': ceil,
+                 'ceil_lambda_nm': ceil_lambda_nm}
+    np.save(npysavedir + savestr, save_dict)
+    print 'data saved!: ' + npysavedir + savestr
 
     # large scatter plot with all the points on
     # mvo.plot_back_point_diff(statistics,
@@ -415,7 +437,7 @@ if __name__ == '__main__':
     print p
     print '\n'
     x_lim = ax.get_xlim()
-    ax.plot(np.array(x_lim), m * np.array(x_lim) + b, ls='-', color='green', label='model<=100')
+    ax.plot(np.array(x_lim), m * np.array(x_lim) + b, ls='--', color='green', label='model<=100')
 
     # x = np.array(statistics['aer_mod'])[vlow_aer_bool] # CTRL
     x = np.array(statistics['aer_obs'])[vlow_aer_bool] # runs 2+
@@ -428,7 +450,7 @@ if __name__ == '__main__':
     print p
     print '\n'
     x_lim = ax.get_xlim()
-    ax.plot(np.array(x_lim), m * np.array(x_lim) + b, ls='-', color='purple', label='model<=50')
+    ax.plot(np.array(x_lim), m * np.array(x_lim) + b, ls='--', color='purple', label='model<=50')
 
     plt.axis('tight')
     plt.ylim([1.0e-8, 2e-5])
@@ -436,7 +458,14 @@ if __name__ == '__main__':
     plt.xlabel('aerosol concentration [microgram m-3]')
     plt.legend(loc=6)
     plt.tight_layout()
-    eu.add_at(ax, 'eq: y=%1.6sx + %1.6s; pearson r=%1.4s, p=%1.4s' % (m, b, r, p), loc=1)
+
+    x = np.array(statistics['back_obs'])
+    y = np.array(statistics['back_mod'])
+    idx = np.isfinite(x) & np.isfinite(y)
+    r, p = pearsonr(x[idx], y[idx])
+    rs, ps = spearmanr(x[idx], y[idx])
+    # eu.add_at(ax, 'eq: y=%1.6sx + %1.6s; pearson r=%1.4s, p=%1.4s' % (m, b, r, p), loc=1)
+    eu.add_at(ax, 'Pearson r=%1.4s, p=%1.4s; Spearman r=%1.4s, p=%1.4s; ' % (r, p, rs, ps), loc=1)
     plt.savefig(maindir + 'figures/model_eval/'+aer_run+'_beta_m_vs_pm10_-_beta_o_vs_pm10_aerFOv1.2_80-700.png')
 
 
@@ -475,6 +504,9 @@ if __name__ == '__main__':
     np.array(statistics['datetime'])[idx[0]]
     np.hstack(statistics['datetime'])[idx[0]]
 
+    np.nanmean(statistics['aer_mod'])
+    np.nanmean(statistics['aer_obs'])
+    idx = np.isfinite(statistics['aer_obs'])
     # ----------------------------------------------
 
     a = np.nanmean(statistics['ext_coeff_accum'])
