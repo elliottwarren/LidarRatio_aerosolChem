@@ -24,7 +24,6 @@ from forward_operator import FOconstants as FOcon
 
 def read_pm10_obs(aer_fname):
 
-    pm10_obs = {}
     from_zone = tz.gettz('GMT')
     to_zone = tz.gettz('UTC')
 
@@ -63,8 +62,8 @@ if __name__ == '__main__':
 
     # year of data
     # for NK - only got 2014 and 2015 with APS data
-    years = ['2014']
-    year = years[0]
+    # years = ['2014']
+    # year = years[0]
     # years = [str(i) for i in range(2014, 2017)]
 
 
@@ -101,14 +100,14 @@ if __name__ == '__main__':
 
     plt.figure()
     plt.scatter(pm10_obs['pm_10'], N_r_obs['Dv_accum']/2 ,s=2)
-    plt.plot(pm10_obs['pm_10'], r_md * 1e6, '--', colour='grey', alpha=0.7)
+    plt.plot(q_aer_ug_kg, r_md * 1e9, '--', color='grey', alpha=0.7)
     plt.xlabel('pm10 [microgram m-3]')
     plt.ylabel('volume radius [nm]')
     plt.savefig(savedir + 'r_accum_vs_pm10_NK_2014-2015.png')
 
     plt.figure()
-    plt.scatter(pm10_obs['pm_10'], N_r_obs['Ntot_accum'] / 2, s=2)
-    plt.plot(pm10_obs['pm_10'], N_aer *1e6, '--', colour='grey', alpha=0.7)
+    plt.scatter(pm10_obs['pm_10'], N_r_obs['Ntot_accum'] *1e6 / 2, s=2)
+    plt.plot(q_aer_ug_kg, N_aer, '--', color='grey', alpha=0.7)
     plt.xlabel('pm10 [microgram m-3]')
     plt.ylabel('Ntot (accum) [cm-3]')
     plt.savefig(savedir + 'N_accum_vs_pm10_NK_2014-2015.png')
