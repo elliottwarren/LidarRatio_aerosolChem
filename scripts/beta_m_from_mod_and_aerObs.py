@@ -204,10 +204,10 @@ if __name__ == '__main__':
 
     # NK CTRL - all clear sky days for paper 2
     # CL31-D days '20160504', '20160505', '20160506'
-    # daystrList = ['20160823','20160911','20161102','20161125','20161129','20161130','20161204','20161205','20161227','20161229',
-    #    '20170105','20170117','20170118','20170119','20170120','20170121','20170122','20170325','20170330','20170408','20170429',
-    #    '20170522','20170524','20170526','20170601','20170614','20170615','20170619','20170620','20170626','20170713','20170717',
-    #    '20170813','20170827','20170828','20170902']
+    daystrList = ['20160823','20160911','20161102','20161125','20161129','20161130','20161204','20161205','20161227','20161229',
+       '20170105','20170117','20170118','20170119','20170120','20170121','20170122','20170325','20170330','20170408','20170429',
+       '20170522','20170524','20170526','20170601','20170614','20170615','20170619','20170620','20170626','20170713','20170717',
+       '20170813','20170827','20170828','20170902']
 
     # NK N and r accum (no murk aerosol required) (should be 2014 - 2015 inclusive, for when we have aerosol data)
     # All clear days
@@ -217,8 +217,11 @@ if __name__ == '__main__':
     #               '20150307', '20150310', '20150414', '20150415', '20150420', '20150421', '20150604', '20150611',
     #               '20150629', '20150710', '20150802', '20151025']
     # Subsample of "All clear days" that does not produce nan days (has all the required obs. data)
-    daystrList = ['20140606', '20140703','20140922','20150307','20150310','20150414', '20150415', '20150420',
-                  '20150421', '20150604','20150611','20150802']
+    # daystrList = ['20140606', '20140703','20140922','20150307','20150310','20150414', '20150415', '20150420',
+    #               '20150421', '20150604','20150611','20150802']
+
+    # further subsample when hourly S data is also available
+    # daystrList = ['20140606', '20140703', '20150307', '20150420', '20150421','20150604','20150802']
 
     # all backscatter was np.nan as obsN or obsr was missing
     # daystrList = ['20141129']
@@ -239,15 +242,22 @@ if __name__ == '__main__':
 
     # type of model evaluation and save string
     # eval_type = 'CTRL'
-    aer_run_number = 3
+    aer_run_number = 1
     aer_run = 'run'+str(aer_run_number)
+    # extra = '_constant_S_40'
+    extra = '' # use this if there isn't anything extra to add to the save string
 
     # argumets for aerFO based on run type
+
+    if aer_run == 'run0': # pm10 as mass
+        kwargs = {'obs_N': True, 'obs_r': True, 'pm10_as_aerosol_input': True}
+        aer_modes = ['accum']
+        eval_type = 'obs_N_obs_r_accum_pm10aerinput'
     if aer_run == 'run1': # CTRL
         kwargs = {}
         eval_type = 'CTRL'
     elif aer_run == 'run2': # N and r (accum range)
-        kwargs = {'obs_N': True, 'obs_r': True}
+        kwargs = {'obs_N': True, 'obs_r': True} # , 'use_S_constant': 40.0
         aer_modes = ['accum']
         eval_type = 'obs_N_obs_r_accum'
     elif aer_run == 'run3': # N and r (accum range)
@@ -260,8 +270,14 @@ if __name__ == '__main__':
         eval_type = 'obs_N_obs_r_fine_accum_coarse'
     elif aer_run == 'run6':
         kwargs = {'obs_N': True, 'obs_r': True, 'use_S_hourly': True}
-    aer_modes = ['accum']
+        aer_modes = ['accum']
+        eval_type = 'obs_N_obs_r_accum-S_hourly'
 
+    # add the extra bit
+    eval_type += extra
+
+    print '~~~~~~~~~~~~~~~~~~~~'
+    print 'aerFO ' + aer_run + ' in progress....'
 
     # ceilometer
     if aer_run_number == 1:
@@ -351,7 +367,7 @@ if __name__ == '__main__':
                 mod_data = mod_data[site]
                 bsc_obs = bsc_obs[ceil]
 
-                # read in pm10 obs
+                # read in pm10 obs [kg m-3]
                 pm10_obs = read_pm10_obs(mod_data['time'], matchModSample=True)
 
                 # S_out += list(mod_data['S'])
@@ -373,11 +389,11 @@ if __name__ == '__main__':
 
     # ---------------------------
 
-    # save the statistics
-    save_dict = {'statistics': statistics, 'cases': days_iterate, 'site': site, 'ceil': ceil,
-                 'ceil_lambda_nm': ceil_lambda_nm}
-    np.save(npysavedir + savestr, save_dict)
-    print 'data saved!: ' + npysavedir + savestr
+    # # save the statistics
+    # save_dict = {'statistics': statistics, 'cases': days_iterate, 'site': site, 'ceil': ceil,
+    #              'ceil_lambda_nm': ceil_lambda_nm}
+    # np.save(npysavedir + savestr, save_dict)
+    # print 'data saved!: ' + npysavedir + savestr
 
     # large scatter plot with all the points on
     # mvo.plot_back_point_diff(statistics,
@@ -387,17 +403,21 @@ if __name__ == '__main__':
     # quick plot scatter backscatter against aerosol beta_o vs pm10, beta_m vs murk_i (or pm10)
 
     # scatter plot beta_o vs pm10; beta_m vs murk
-    # low_aer_bool = np.array(statistics['aer_mod']) <= 100 #CTRL
-    # vlow_aer_bool = np.array(statistics['aer_mod']) <= 50 # CTRL
-    low_aer_bool = np.array(statistics['aer_obs']) <= 100
-    vlow_aer_bool = np.array(statistics['aer_obs']) <= 50
+    if aer_run_number == 1:
+        low_aer_bool = np.array(statistics['aer_mod']) <= 100 #CTRL
+        vlow_aer_bool = np.array(statistics['aer_mod']) <= 50 # CTRL
+    else:
+        low_aer_bool = np.array(statistics['aer_obs']) <= 100
+        vlow_aer_bool = np.array(statistics['aer_obs']) <= 50
 
     fig = plt.figure()
     ax = plt.gca()
 
     plt.scatter(statistics['aer_obs'], statistics['back_obs'], s=3, color='blue')
-    # plt.scatter(statistics['aer_mod'], statistics['back_mod'], s=3, color='red') # CTRL
-    plt.scatter(statistics['aer_obs'], statistics['back_mod'], s=3, color='red') # runs 2+
+    if aer_run_number == 1:
+        plt.scatter(statistics['aer_mod'], statistics['back_mod'], s=3, color='red') # CTRL
+    else:
+        plt.scatter(statistics['aer_obs'], statistics['back_mod'], s=3, color='red') # runs 2+
     #plt.scatter(np.array(statistics['aer_mod'])[low_aer_bool], np.array(statistics['back_mod'])[low_aer_bool],
     #            s=3, color='green', label='murk<=100')
 
@@ -413,8 +433,10 @@ if __name__ == '__main__':
     x_lim = ax.get_xlim()
     ax.plot(np.array(x_lim), m * np.array(x_lim) + b, ls='-', color='blue', label='obs')
 
-    # x = np.array(statistics['aer_mod']) # CTRL
-    x = np.array(statistics['aer_obs']) # runs 2+
+    if aer_run_number == 1:
+        x = np.array(statistics['aer_mod']) # CTRL
+    else:
+        x = np.array(statistics['aer_obs']) # runs 2+
     y = np.array(statistics['back_mod'])
     idx = np.isfinite(x) & np.isfinite(y)
     m, b = np.polyfit(x[idx], y[idx], 1)
@@ -426,8 +448,10 @@ if __name__ == '__main__':
     x_lim = ax.get_xlim()
     ax.plot(np.array(x_lim), m * np.array(x_lim) + b, ls='-', color='red', label='model')
 
-    # x = np.array(statistics['aer_mod'])[low_aer_bool] # CTRL
-    x = np.array(statistics['aer_obs'])[low_aer_bool] # runs 2+
+    if aer_run_number == 1:
+        x = np.array(statistics['aer_mod'])[low_aer_bool] # CTRL
+    else:
+        x = np.array(statistics['aer_obs'])[low_aer_bool] # runs 2+
     y = np.array(statistics['back_mod'])[low_aer_bool]
     idx = np.isfinite(x) & np.isfinite(y)
     m, b = np.polyfit(x[idx], y[idx], 1)
@@ -439,8 +463,10 @@ if __name__ == '__main__':
     x_lim = ax.get_xlim()
     ax.plot(np.array(x_lim), m * np.array(x_lim) + b, ls='--', color='green', label='model<=100')
 
-    # x = np.array(statistics['aer_mod'])[vlow_aer_bool] # CTRL
-    x = np.array(statistics['aer_obs'])[vlow_aer_bool] # runs 2+
+    if aer_run_number == 1:
+        x = np.array(statistics['aer_mod'])[vlow_aer_bool] # CTRL
+    else:
+        x = np.array(statistics['aer_obs'])[vlow_aer_bool] # runs 2+
     y = np.array(statistics['back_mod'])[vlow_aer_bool]
     idx = np.isfinite(x) & np.isfinite(y)
     m, b = np.polyfit(x[idx], y[idx], 1)
@@ -465,8 +491,8 @@ if __name__ == '__main__':
     r, p = pearsonr(x[idx], y[idx])
     rs, ps = spearmanr(x[idx], y[idx])
     # eu.add_at(ax, 'eq: y=%1.6sx + %1.6s; pearson r=%1.4s, p=%1.4s' % (m, b, r, p), loc=1)
-    eu.add_at(ax, 'Pearson r=%1.4s, p=%1.4s; Spearman r=%1.4s, p=%1.4s; ' % (r, p, rs, ps), loc=1)
-    plt.savefig(maindir + 'figures/model_eval/'+aer_run+'_beta_m_vs_pm10_-_beta_o_vs_pm10_aerFOv1.2_80-700.png')
+    eu.add_at(ax, 'Pearson r=%1.4s, p=%1.1e; Spearman r=%1.4s, p=%1.1e; ' % (r, p, rs, ps), loc=1)
+    plt.savefig(maindir + 'figures/model_eval/'+aer_run+'_beta_m_vs_pm10_-_beta_o_vs_pm10_aerFOv1.2_80-700'+extra+'.png')
 
 
 
@@ -497,7 +523,7 @@ if __name__ == '__main__':
     # plt.axis('tight')
     plt.tight_layout()
 
-    plt.savefig(savedir + '/beta_m_vs_beta_o/'+aer_run +'_beta_m_vs_beta_o_aerFOv'+str(version)+'_80-700.png')
+    plt.savefig(savedir + '/beta_m_vs_beta_o/'+aer_run +'_beta_m_vs_beta_o_aerFOv'+str(version)+'_80-700'+extra+'.png')
 
     # exract out parts of both lists (need to turn them into arrays to np.where() them)
     idx = np.where(np.array(statistics['back_mod']) > 6.0e-06)
