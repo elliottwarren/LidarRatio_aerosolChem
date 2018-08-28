@@ -246,7 +246,6 @@ def read_routine_aps(filepath_aps, year, met_vars):
     header_defs_array = np.asarray(header_defs)
     header_split = np.array([i[1].split(' ') for i in header_defs_array])
     header_orig = np.array([str(i[0]) for i in header_defs_array])
-    # header_mid = np.array([str(i[3]) for i in header_split])
     header_mid = np.array([float(i[3]) for i in header_split])
 
     # convert header units from microns to nanometres
@@ -272,34 +271,37 @@ def read_routine_aps(filepath_aps, year, met_vars):
     else:
         raise ValueError('Headers do not allign between APS data and APS definitions!')
 
-    # read in the aps GF and adjust the diameters
-    GFfile = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/common_data/GF_climatology_NK_APS.npy'
-    data = np.load(GFfile).flat[0]
-    GF_clim = data['GF_climatology']
-    RH_frac = data['RH_frac']
+    # # read in the aps GF and adjust the diameters
+    # GFfile = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/common_data/GF_climatology_NK_APS.npy'
+    # data = np.load(GFfile).flat[0]
+    # GF_clim = data['GF_climatology']
+    # RH_frac = data['RH_frac']
+    #
+    # # apply GF to dry the APS sizes
+    # # create array ready to be filled
+    # headers_shrink = np.empty(N['binned'].shape)
+    # headers_shrink[:] = np.nan
+    # print 'shrinking APS headers to help calculate DRY accumulation N and r'
+    #
+    # for t_idx, t in enumerate(N['time']):
+    #
+    #     # find month idx
+    #     m_idx = t.month-1
+    #     # # find nearest time idx in met_vars to APS
+    #     # _, n_time, _ = eu.nearest(met_vars['time'], t)
+    #     # find nearest time idx in met_vars to APS
+    #     # binary search = faster method
+    #     n_time = eu.binary_search(met_vars['time'], t, lo=max(0,t_idx-1000), hi=min(t_idx+1000, len(met_vars['time'])))
+    #     #_, n_time, _ = eu.nearest(met_vars['time'], t)
+    #     # find nearest RH idx
+    #     _, rh_idx, _ = eu.nearest(RH_frac, met_vars['RH_frac'][n_time])
+    #
+    #     # apply the GF correction (divide by GF as the APS data needs to be shrunk!)
+    #     headers_shrink[t_idx, :] = N['headers_orig'] / GF_clim[m_idx, rh_idx, :]
+    #
+    # N['headers'] = headers_shrink
 
-    # apply GF to dry the APS sizes
-    # create array ready to be filled
-    headers_shrink = np.empty(N['binned'].shape)
-    headers_shrink[:] = np.nan
-
-    for t_idx, t in enumerate(N['time']):
-
-        # find month idx
-        m_idx = t.month-1
-        # # find nearest time idx in met_vars to APS
-        # _, n_time, _ = eu.nearest(met_vars['time'], t)
-        # find nearest time idx in met_vars to APS
-        # binary search = faster method
-        n_time = eu.binary_search(met_vars['time'], t, lo=max(0,t_idx-1000), hi=min(t_idx+1000, len(met_vars['time'])))
-        #_, n_time, _ = eu.nearest(met_vars['time'], t)
-        # find nearest RH idx
-        _, rh_idx, _ = eu.nearest(RH_frac, met_vars['RH_frac'][n_time])
-
-        # apply the GF correction (divide by GF as the APS data needs to be shrunk!)
-        headers_shrink[t_idx, :] = N['headers_orig'] / GF_clim[m_idx, rh_idx, :]
-
-    N['headers'] = headers_shrink
+    N['headers'] = np.tile(N['headers_orig'],(len(N['time']),1))
 
     return N
 
@@ -1021,23 +1023,30 @@ def get_size_range_idx(D, D_min, D_max):
 
     """
 
+    # set max diameter for coarse to be 10 microns? (as read off from the dV/dlogD distribution?
+    max_coarse_D = 10000 # manually set limit
+    print 'coarse maximum range manually set to ' + str(max_coarse_D)
+    # max_coarse_D = D[-1] # no set limit
+
     # ensure range_idx dtype=int for use as an index
     accum_minD_idx = np.array([eu.nannearest(D[t,:], D_min)[1] for t in range(D.shape[0])]) # .shape[0] = time dimension
     accum_maxD_idx = np.array([eu.nannearest(D[t, :], D_max)[1] for t in range(D.shape[0])])
     accum_range_idx = [np.arange(min_idx, max_idx+1, dtype=int) for min_idx, max_idx in zip(accum_minD_idx, accum_maxD_idx)]
 
     fine_range_idx = [np.arange(0, min_idx, dtype=int) for min_idx in accum_minD_idx]
-    coarse_range_idx = [np.arange(max_idx+1, D.shape[1], dtype=int) for max_idx in accum_maxD_idx] # .shape[1] = diameter dimension
+    coarse_maxD_idx = np.array([eu.nannearest(D[t, :], max_coarse_D)[1] for t in range(D.shape[0])])
+    coarse_range_idx = [np.arange(min_idx, max_idx+1, dtype=int) for min_idx, max_idx in zip(accum_maxD_idx, coarse_maxD_idx)]
+    # coarse_range_idx = [np.arange(max_idx+1, D.shape[1], dtype=int) for max_idx in accum_maxD_idx] # .shape[1] = diameter dimension
 
     return fine_range_idx, accum_range_idx, coarse_range_idx
 
-def calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D, units='nm'):
+def calc_volume_and_number_mean_diameter(size_range_idx, dNdlogD, dlogD, D, units='nm'):
 
     """
-    Calcualted volume and number mean diameter
+    Calcualted volume and number mean diameter using dNdlogD
+    NOTE: alternative equations exist to calculate volume and mean number diameter from other distribuions e.g. dVdlogD
 
     :param size_range_idx: idx for the size range
-    :param dNdD:
     :param dNdlogD:
     :param dlogD:
     :param D:
@@ -1065,7 +1074,10 @@ def calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D
     for t, size_range_idx_t in enumerate(size_range_idx):
 
         # 1. Volume mean diameter
-        # calculate two parts of the eq. first
+        # Dv =  SUM ( (dN/dlogD) * D^4 * dlogD)   / SUM ( (dN/dlogD) * D^3 * dlogD) <- from Ben Johnson email
+        # source: an altered version of eq 10 to calculate volume weighted instead of area weighted
+        #   in http://eodg.atm.ox.ac.uk/user/grainger/research/aerosols.pdf
+        # Calculate two parts of the eq. first
         # # dNdlogD * dlogD * D = N of original bin
         # 1/6 * pi * D**3 = V (volume sphere)
         #   below = sum(V * D) / sum(V)
@@ -1273,64 +1285,48 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
 
     met_skip_idx = 0
 
-    for t, time_t in enumerate(dN['time'][:-1]):
+    for t, time_t in enumerate(dN['time']):
 
+        # time previous to time_t
+        time_tm1 = time_t - dt.timedelta(minutes=60)
 
-        # bool = np.logical_and(np.array(met_vars['time']) > time_t,
-        #                       np.array(met_vars['time']) < time_t + dt.timedelta(hours=1))
+        s_idx = int(eu.binary_search(met_vars['time'], time_tm1))
+        # end of time period
+        e_idx = int(eu.binary_search(met_vars['time'], time_t))
 
-        if t == 0:
-            bool = np.logical_and(np.array(met_vars['time']) > time_t,
-                                  np.array(met_vars['time']) < time_t + dt.timedelta(hours=1))
-        else:
-            bool = np.logical_and(np.array(met_vars['time'][met_skip_idx:met_skip_idx+300]) >= time_t,
-                                  np.array(met_vars['time'][met_skip_idx:met_skip_idx+300]) < time_t + dt.timedelta(hours=1))
+        # if the time_range time and data['time'] found in this iteration are within an acceptable range (15 mins)
+        tm1_diff = time_tm1 - met_vars['time'][s_idx]
+        t_diff = time_t - met_vars['time'][e_idx]
 
-        met_idx = np.where(bool == True)[0] + met_skip_idx
-        met_idx = np.where(bool == True)[0]
+        met_idx = range(s_idx, e_idx+1)
 
-        for var in ['RH', 'RH_frac','Tair', 'press']:
-
-            # average of variable for this time period, t
-            var_i = np.nanmean(met_vars[var][met_idx])
-            # var_i = np.nanmean(met_vars[var][bool])
-
-            # store in N_hourly for picle saving
-            # N_hourly[var][t] = var_i
-
-            # store met_vars_avg for diagnosis later
-            met_vars_avg[var][t] = var_i
-
-        # if subsample == True:
-        #     # only keep values that are less than the RH threshold by np.nan values above it
-        #     # only keep values if there was no rain present during the period
-        #     # do not remove the RH, Tair or pressure values
-        #     if equate == 'lt':
-        #         if (met_vars_avg['RH'][t] > RHthresh): #| (med_RR > 0.0):
-        #             N_hourly['dN'][t, :] = np.nan
-        #             N_hourly['dV/dlogD'][t, :] = np.nan
-        #             N_hourly['dN/dlogD'][t, :] = np.nan
-        #             N_hourly['Dv_lt2p5'][t] = np.nan
-        #             N_hourly['Dn_lt2p5'][t] = np.nan
-        #             N_hourly['Dv_2p5_10'][t] = np.nan
-        #             N_hourly['Dn_2p5_10'][t] = np.nan
+        # # bool = np.logical_and(np.array(met_vars['time']) > time_t,
+        # #                       np.array(met_vars['time']) < time_t + dt.timedelta(hours=1))
         #
-        #     # only keep values that are greater than the threshold by np.nan values below it
-        #     # only keep values if there was no rain present during the period
-        #     elif equate == 'gt':
-        #         if (met_vars_avg['RH'][t] < RHthresh): #| (med_RR > 0.0):
-        #             N_hourly['dN'][t, :] = np.nan
-        #             N_hourly['dV/dlogD'][t, :] = np.nan
-        #             N_hourly['dN/dlogD'][t, :] = np.nan
-        #             N_hourly['Dv_lt2p5'][t] = np.nan
-        #             N_hourly['Dn_lt2p5'][t] = np.nan
-        #             N_hourly['Dv_2p5_10'][t] = np.nan
-        #             N_hourly['Dn_2p5_10'][t] = np.nan
+        # if t == 0:
+        #     bool = np.logical_and(np.array(met_vars['time']) > time_t,
+        #                           np.array(met_vars['time']) < time_t + dt.timedelta(hours=1))
+        # else:
+        #     bool = np.logical_and(np.array(met_vars['time'][met_skip_idx:met_skip_idx+300]) >= time_t,
+        #                           np.array(met_vars['time'][met_skip_idx:met_skip_idx+300]) < time_t + dt.timedelta(hours=1))
         #
-        # # change skip idx to miss data already used in averaging
-        # #   so the entire time array doesn't need to be searched through for each iteration of t
-        # if met_idx.size != 0:
-        #     met_skip_idx = met_idx[-1] + 1
+        # met_idx = np.where(bool == True)[0] + met_skip_idx
+        # # met_idx = np.where(bool == True)[0]
+
+
+        if (tm1_diff.total_seconds() <= 15 * 60) & (t_diff.total_seconds() <= 15 * 60):
+            for var in ['RH', 'RH_frac','Tair', 'press']:
+
+                # average of variable for this time period, t
+                var_i = np.nanmean(met_vars[var][met_idx])
+                # var_i = np.nanmean(met_vars[var][bool])
+
+                # store in N_hourly for picle saving
+                N_hourly[var][t] = var_i
+
+                # store met_vars_avg for diagnosis later
+                met_vars_avg[var][t] = var_i
+
 
     # save dN data in pickle form
     # save time, Dv and N as a pickle
@@ -1357,7 +1353,7 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
         np.save(pickledir + 'N_hourly_'+savestr+subsamplestr+'_'+extra, N_hourly)
         print 'N_hourly_'+savestr+subsamplestr+'_'+extra+'.npy'+'saved!'
 
-    return N_hourly, met_vars
+    return N_hourly, met_vars_avg
 
 def np_save_N_r(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr, small_D_idx, large_D_idx,
                                          subsample=True, RHthresh=60.0, equate='lt', save=True, extra=''):
@@ -1659,6 +1655,22 @@ if __name__ == '__main__':
     # save string
     savestr = site_meta['site_short'] + ''.join(['_'+i if site_ins[i] == True else '' for i in site_ins.iterkeys()])
 
+    aer_density = {'(NH4)2SO4': 1770.0,
+                   'NH4NO3': 1720.0,
+                   'NaCl': 2160.0,
+                   'CORG': 1100.0,
+                   'CBLK': 1200.0}
+
+    # dynamic shape factor (X=1 for perfect sphere, X>1 for non-perfect sphere)
+    shape_factor = {'(NH4)2SO4': 1, # Seinfeld and Pandis
+                   'NH4NO3': 1, # taken here as 1
+                   'NaCl': 1.08, # Seinfeld and Pandis
+                   'CORG': 1, # Zelenyuk et al., 2006
+                   'CBLK': 1.2} # Zhang et al., 2016
+
+    # pure water density
+    water_density = 1000.0 # kg m-3
+
     # ==============================================================================
     # Read met data
     # ==============================================================================
@@ -1782,6 +1794,133 @@ if __name__ == '__main__':
                     smps_N['time'] = np.append(smps_N['time'], smps_N_year['time'])
                     smps_N['headers'] = smps_N_year['headers']
 
+
+            # # convert mobility equivalenet diameter to volume equivalent diameter
+            #
+            # # mobility diameter (d_m)
+            # d_m = smps_N['headers']
+            # # shape factor for this aerosol
+            # X = shape_factor['CBLK']
+            #
+            # def calculate_Cc(d_m):
+            #
+            #     """
+            #     Calculate the Cuningham slip correction factor (Cc) for solid particles
+            #     :param d_m [nm]: mobility equivalent diameter
+            #     :param X: dynamic shape factor
+            #     :return: Cc: Cuningham slip correction
+            #     """
+            #
+            #     # constants
+            #     ## Allen and Raabe 1985 for solid particles at STP, to calculate the Cunningham slip factor (Cc)
+            #     alpha = 1.142 # empirical constant for Cc
+            #     beta = 0.558 # empirical constant for Cc
+            #     gamma = 0.999 # empirical constant for Cc
+            #     lam = 68.0 # molecular mean free path [nm] for STP
+            #
+            #     # Knudsen number (what regime are we in? -> Free molecular - transition - continuum)
+            #     Kn = (2.0 * lam) / d_m
+            #     # Cuningham slip correction (Cc)
+            #     y = np.exp(-gamma/Kn) # part of equation
+            #     Cc = 1 + (Kn * (alpha + (beta * y)))
+            #
+            #     return Cc
+            #
+            # Cc_d_m = calculate_Cc(d_m)
+            #
+            # # # create d_v as 0 then adjust each time
+            # d_v = np.ones(d_m.shape)*0.01
+            # Cc_d_v = calculate_Cc(d_v)
+            #
+            # # # Knudsen number (what regime are we in? -> Free molecular - transition - continuum)
+            # # Kn = (2.0 * lam) / d_v
+            # # # Cuningham slip correction (Cc)
+            # # y = np.exp(-gamma/Kn) # part of equation
+            # # Cc_d_v = 1 + (Kn * (alpha + (beta * y)))
+            #
+            # d_m_guess = d_v * X * Cc_d_m / Cc_d_v
+            # diff = d_m - d_m_guess
+            # d_v2 = diff
+            #
+            # # d_v_guess = d_m / (X * Cc_d_m / Cc_d_v)
+            # # diff = d_v - d_v_guess
+            # # d_v_2 = d_v
+            #
+            # # so d_m guess using d_v = 0.01 was too low... therefore it needs to be increased
+            # # d_v2 = diff # in this first instance, this makes it larger...
+            # Cc_d_v2 = calculate_Cc(d_v2)
+            # d_m_guess2 = d_v2 * X * Cc_d_m / Cc_d_v2
+            # diff2 = d_m - d_m_guess2
+            # d_v3 = diff2
+            #
+            # # repreat the above steps and get a new diff
+            # Cc_d_v3 = calculate_Cc(d_v3)
+            # d_m_guess3 = d_v3 * X * Cc_d_m / Cc_d_v3
+            # diff3 = d_m - d_m_guess3
+            # d_v4 = diff3
+            #
+            # d_v = np.ones(d_m.shape) * 0.01
+            # keep = [d_v[0]]
+            # for i in range(50):
+            #     Cc_d_v = calculate_Cc(d_v)
+            #     d_m_guess = d_v * X * Cc_d_m / Cc_d_v
+            #     diff = d_m - d_m_guess
+            #     d_v = diff
+            #     keep += [d_v[0]]
+
+
+
+
+        # alpha = 1.142 # empirical constant for Cc
+        # beta = 0.558 # empirical constant for Cc
+        # gamma = 0.999 # empirical constant for Cc
+        # lam = 68.0 # molecular mean free path [nm] for STP
+        #
+        # # Knudsen number (what regime are we in? -> Free molecular - transition - continuum)
+        # Kn = (2.0 * lam) / d_m
+        #
+        #
+        # k = d_m/(1.2*Cc_d_m)
+        # a = (1.0 + beta)/alpha
+        # b = (2.0 * lam)/(k*a)
+        # c = (beta * (gamma**2.0))/(2.0 * alpha)
+        #
+        # x1 = 2.0*(a**3.0)
+        # x2 = 3 * np.sqrt(3.0)
+        # x3 = 4.0*(a**3.0)*c
+        # x4 = (a**2)*(b**2.0)
+        # x5 = 18.0*a*b*c
+        # x6 = 4.0*(b**3.0)
+        # x7 = 27.0*(c**2.0)
+        # x8 = 9.0*a*b
+        # x9 = 27.0*c
+        # x10 = 3.0 * (np.power(2.0,1.0/3.0))
+        # x11 = (-2.0*a) + (3.0*np.sqrt(3.0))
+        #
+        # y1 = np.sqrt(x3 - x4 + x5 - x6 + x7)
+        # y2 = np.power(-x1 + (x2 * y1) - x8 - x9, 1.0/3.0) # main cube root bit
+        # z1 = (y2 / x10) # first bit
+        #
+        # x13 = np.power(2.0, 1.0/3.0)
+        # x14 = ((-a**2)-3*b)
+        #
+        # z2 = (x13 * x14)/(3.0*y2)
+        # z3 = a/3.0
+        #
+        # answer = z1 - z2 - z3
+
+        # d_v_range = np.arange(1,601)
+        # d_m_range = np.arange(1,601)
+        # Cc_d_v = calculate_Cc(d_v_range)
+        # Cc_d_m = calculate_Cc(d_m_range)
+        #
+        # plt.plot(d_v_range, d_v_range*1.2/Cc_d_v, label='d_v*X/Cc(d_v)')
+        # plt.plot(d_m_range, d_m_range / Cc_d_m, label='d_m/Cc(d_m)')
+
+
+
+
+            # -------------------------------------------
 
         # get bin parameters
         smps_N = calc_bin_parameters_smps(smps_N, units='nm')
@@ -1928,6 +2067,10 @@ if __name__ == '__main__':
     dN = {'time': dNdlogD['time'], 'binned': np.empty(dNdlogD['binned'].shape), 'D': D, 'dD': dD}
     dN['binned'][:] = np.nan
 
+    # just the number of particles in each bin. Store all the diameter variables too, so it can be saved later
+    dV = {'time': dNdlogD['time'], 'binned': np.empty(dNdlogD['binned'].shape), 'D': D, 'dD': dD}
+    dV['binned'][:] = np.nan
+
     # Volume mean diameter
     dNdlogD['Dv'] = np.empty(len(dNdlogD['time']))
     dNdlogD['Dv'][:] = np.nan # 2nd part of eqn for Dv
@@ -1961,12 +2104,15 @@ if __name__ == '__main__':
         # dNdD[key] = dNdlogD[key] / (2.303 * D_i)  # calc nN(D) from nN(dlogD)
         dNdD['binned'][:, i] = dNdlogD['binned'][:, i] / (2.303 * D_i)  # calc nN(D) from nN(dlogD)
 
-        # Calc dN from dN/dD(Actual number of particles per bin)
+        # Calc dN from dN/dD (Actual number of particles per bin)
         dN['binned'][:, i] = dNdD['binned'][:, i] * dD_i
 
         # -----------------------------------------------------------------------
         # Calc dV/dD from dN/dD (eqn 8.6)
         dVdD['binned'][:, i] = (np.pi / 6.0) * (D_i ** 3.0) * dNdD['binned'][:, i]
+
+        # Calc dV from dN (eqn 8.6, total volume per bin)
+        dV['binned'][:, i] = (np.pi / 6.0) * (D_i ** 3.0) * dN['binned'][:, i]
 
         # Calc dV/dlogD from dN/dlogD (eqn 8.6)
         dVdlogD['binned'][:, i] = (np.pi / 6.0) * (D_i ** 3.0) * dNdlogD['binned'][:, i]
@@ -1978,25 +2124,25 @@ if __name__ == '__main__':
     D_max = 2500.0 # 2.5 microns
     _, size_range_idx, _ = get_size_range_idx(D, D_min, D_max)
 
-    dNdlogD['Dv_lt2p5'], dNdlogD['Dn_lt2p5'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D)
+    dNdlogD['Dv_lt2p5'], dNdlogD['Dn_lt2p5'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdlogD, dlogD, D)
 
     # calculate the volume and number mean diameters for the 2.5 - 10 micron (Dv and Dn respectively)
     D_min = 2500.0 # 2.5 microns
     D_max = 10000.0 # 10 microns
     _, size_range_idx, _ = get_size_range_idx(D, D_min, D_max)
-    dNdlogD['Dv_2p5_10'], dNdlogD['Dn_2p5_10'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D)
+    dNdlogD['Dv_2p5_10'], dNdlogD['Dn_2p5_10'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdlogD, dlogD, D)
 
     # calculate the volume and number mean diameters for below 10 micron (Dv and Dn respectively)
     D_min = 0.0 # 0 microns
     D_max = 10000.0 # 10 microns
     _, size_range_idx, _ = get_size_range_idx(D, D_min, D_max)
-    dNdlogD['Dv_10'], dNdlogD['Dn_10'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdD, dNdlogD, dlogD, D)
+    dNdlogD['Dv_10'], dNdlogD['Dn_10'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdlogD, dlogD, D)
 
 
     # # extract out only aerosol data based on the RH threshold and if it is less or more than it.
     # # Necessary if the measurements were taken at ambient RH and not dried before measureing
-    # N_hourly, met_avg = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
-    #                                 small_D_idx, large_D_idx, subsample=False, save=True, extra=year + '_extra_months_fast')
+    N_hourly, met_vars_avg = hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, pickledir, savestr,
+                                    small_D_idx, large_D_idx, subsample=False, save=True, extra=year + '')
 
     # # # quickplot what it looks like
     # # quick_plot_dV(N_hourly, N_hourly_50, dVdlogD, savestr, savedir)
@@ -2035,10 +2181,17 @@ if __name__ == '__main__':
     # get the idx for each range
     fine_range_idx, accum_range_idx, coarse_range_idx = get_size_range_idx(D, D_min_accum, D_max_accum)
 
+    # # calculate the mean volume and mean number diameter
+    # dNdlogD['Dv_accum'], dNdlogD['Dn_accum'] = calc_volume_and_number_mean_diameter(accum_range_idx, dNdlogD, dlogD, D)
+    # dNdlogD['Dv_fine'], dNdlogD['Dn_fine'] = calc_volume_and_number_mean_diameter(fine_range_idx, dNdlogD, dlogD, D)
+    # dNdlogD['Dv_coarse'], dNdlogD['Dn_coarse'] = calc_volume_and_number_mean_diameter(coarse_range_idx, dNdlogD, dlogD, D)
+
     # calculate the mean volume and mean number diameter
-    dNdlogD['Dv_accum'], dNdlogD['Dn_accum'] = calc_volume_and_number_mean_diameter(accum_range_idx, dNdD, dNdlogD, dlogD, D)
-    dNdlogD['Dv_fine'], dNdlogD['Dn_fine'] = calc_volume_and_number_mean_diameter(fine_range_idx, dNdD, dNdlogD, dlogD, D)
-    dNdlogD['Dv_coarse'], dNdlogD['Dn_coarse'] = calc_volume_and_number_mean_diameter(coarse_range_idx, dNdD, dNdlogD, dlogD, D)
+    dNdlogD['Dv_accum'], dNdlogD['Dn_accum'] = calc_volume_and_number_mean_diameter(accum_range_idx, dNdlogD, dlogD, D)
+    dNdlogD['Dv_fine'], dNdlogD['Dn_fine'] = calc_volume_and_number_mean_diameter(fine_range_idx, dNdlogD, dlogD, D)
+    dNdlogD['Dv_coarse'], dNdlogD['Dn_coarse'] = calc_volume_and_number_mean_diameter(coarse_range_idx, dNdlogD, dlogD, D)
+
+    np.nanmean(dNdlogD['Dv_accum'], axis=0)
 
     # Get total number of particles (eqn 8.9)
     for t, accum_range_idx_t in enumerate(accum_range_idx):
@@ -2057,7 +2210,7 @@ if __name__ == '__main__':
     # dNdlogD['Ntot_fine'] = np.sum(dNdlogD['binned'][:, fine_range_idx] * dlogD[None, fine_range_idx], axis=1)
     # # dNdlogD['Ntot_coarse'] = np.sum(dNdlogD['binned'][:, coarse_range_idx] * dlogD[None, coarse_range_idx], axis=1)
 
-    dNdlogD['Ntot'] = np.sum(dNdlogD['binned'] * dlogD[None, :], axis=1)
+    # dNdlogD['Ntot'] = np.sum(dNdlogD['binned'] * dlogD[None, :], axis=1)
 
     # np.nanmean(dNdlogD['Ntot_accum'])
 
@@ -2101,22 +2254,24 @@ if __name__ == '__main__':
     # # plt.savefig(savedir + 'aerosol_distributions/rv_accum_0p02_0p7.png')
     # # plt.close(fig)
 
-
+    accum_range_str = str(int(D_min_accum)) + '-' + str(int(D_max_accum))+'nm'
     #
     # save time, Dv and N as a pickle
-    np_save_data = {'time': dNdlogD['time'], 'Ntot': dNdlogD['Ntot'],
+    np_save_data = {'time': dNdlogD['time'],
                    'Dv_accum': dNdlogD['Dv_accum'], 'Ntot_accum': dNdlogD['Ntot_accum'],
                    'Dv_fine': dNdlogD['Dv_fine'], 'Ntot_fine': dNdlogD['Ntot_fine'],
-                   'accum_range': [D_min_accum, D_max_accum]}
-    np.save(npydir + 'accum_Ntot_Dv_'+savestr+'_'+year+'.npy', np_save_data)
-    print (npydir + 'Ntot_Dv_fine_accum_'+savestr+'_'+year+'.npy saved!')
+                   'Dv_coarse': dNdlogD['Dv_coarse'], 'Ntot_coarse': dNdlogD['Ntot_coarse']}
+    npyfname = savestr +'_Ntot_Dv_fine_acc_coarse'+'_'+year+'_'+accum_range_str+'.npy'
+    np.save(npydir + npyfname, np_save_data)
+    print (npydir + npyfname + ' saved!')
 
     # plot r_v (volume mean) against r_g (geometric mean)
     #   need to estimate r_g from r_v as r_g is needed for f_RH LUT and only r_v is estimated from MURK aerosol
     #   mass in aerFO
 
-    x = dNdlogD['Dv_accum'] / 2 / 1e3
-    y = dNdlogD['r_g'] / 1e3
+    mode_size = 'coarse'
+    x = dNdlogD['Dv_'+mode_size] / 2.0 / 1.0e3
+    y = dNdlogD['r_g_'+mode_size] / 1.0e3
     idx = np.isfinite(x) & np.isfinite(y)
     m, b = np.polyfit(x[idx], y[idx], 1)
     r, p = pearsonr(x[idx], y[idx])
@@ -2130,7 +2285,8 @@ if __name__ == '__main__':
     plt.xlabel(r'$\mathrm{r_{v}}$ (volume mean radius) [microns]')
     plt.ylabel(r'$\mathrm{r_{g}}$ (geometric mean radius) [microns]')
     eu.add_at(ax, 'eq: y=%1.6sx + %1.6s; pearson r=%1.4s, p=%1.4s' % (m, b,r,p))
-    plt.savefig(savedir + savestr + '_' + year + '_' + 'r_v_vs_r_g.png')
+    plt.tight_layout()
+    plt.savefig(savedir + savestr + '_' + year + '_' + 'r_v_vs_r_g_'+mode_size+'.png')
 
 
     # ==============================================================================
@@ -2231,21 +2387,25 @@ if __name__ == '__main__':
     # median, IQRs
     dVdlogD['median'] = np.nanmedian(dVdlogD['binned'], axis=0)
     dVdlogD['25th'] = np.nanpercentile(dVdlogD['binned'], 25, axis=0)
+    dVdlogD['stdev'] = np.nanstd(dVdlogD['binned'], axis=0)
     dVdlogD['75th'] = np.nanpercentile(dVdlogD['binned'], 75, axis=0)
+    dVdlogD['mean'] = np.nanmean(dVdlogD['binned'], axis=0)
 
     # plot volume distribution for data (median with IQR)
-    fig = plt.figure(figsize=(5, 2.5))
-    plt.semilogx(D*1e-3, dVdlogD['median'], label='median', color='blue')
-    plt.vlines(0.5, 0, 3e10, linestyle='--', alpha=0.5)
-    plt.fill_between(D*1e-3, dVdlogD['25th'], dVdlogD['75th'], alpha=0.5, facecolor='blue', label='IQR')
+    fig = plt.figure(figsize=(5, 3))
+    # plt.semilogx(D * 1e-3, dVdlogD['median'], label = 'median', color = 'blue')
+    plt.semilogx(np.nanmean(D, axis=0)*1e-3, dVdlogD['median'], label='mean', color='blue')
+    plt.vlines(0.5, 0, 1e10, linestyle='--', alpha=0.5)
+    plt.fill_between(np.nanmean(D, axis=0)*1e-3,
+                     dVdlogD['25th'],
+                     dVdlogD['75th'],
+                     alpha=0.5, facecolor='blue', label='1stdev')
     plt.ylabel('dV/dlogD [nm3 cm-3]')
-    plt.xlabel('D [microns]')
+    plt.xlabel('dry D [microns]')
     # plt.plot(Dv_logD_data['Dv'], label='using Nv(logD)')
-    plt.legend()
+    # plt.legend()
     plt.tight_layout()
-    plt.savefig(savedir + 'aerosol_distributions/dVdlogD_v_D_.png')
-    '+savestr+'
-    plt.savefig(savedir + 'aerosol_distributions/dVdlogD_v_D_clearflo_winter_combined2.png')
+    plt.savefig(savedir + 'aerosol_distributions/dVdlogD_v_D_'+site_meta['site_short']+'.png')
     plt.close(fig)
     # plt.savefig(savedir + 'aerosol_distributions/rv_Claire_help2.png')
 
