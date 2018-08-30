@@ -1020,7 +1020,6 @@ def get_size_range_idx(D, D_min, D_max):
     :return: fine_range_idx: idx range for the fine mode distribution
     :return: accum_range_idx
     :return: coarse_range_idx
-
     """
 
     # set max diameter for coarse to be 10 microns? (as read off from the dV/dlogD distribution?
@@ -1029,14 +1028,9 @@ def get_size_range_idx(D, D_min, D_max):
     # max_coarse_D = D[-1] # no set limit
 
     # ensure range_idx dtype=int for use as an index
-    accum_minD_idx = np.array([eu.nannearest(D[t,:], D_min)[1] for t in range(D.shape[0])]) # .shape[0] = time dimension
-    accum_maxD_idx = np.array([eu.nannearest(D[t, :], D_max)[1] for t in range(D.shape[0])])
-    accum_range_idx = [np.arange(min_idx, max_idx+1, dtype=int) for min_idx, max_idx in zip(accum_minD_idx, accum_maxD_idx)]
-
-    fine_range_idx = [np.arange(0, min_idx, dtype=int) for min_idx in accum_minD_idx]
-    coarse_maxD_idx = np.array([eu.nannearest(D[t, :], max_coarse_D)[1] for t in range(D.shape[0])])
-    coarse_range_idx = [np.arange(min_idx, max_idx+1, dtype=int) for min_idx, max_idx in zip(accum_maxD_idx, coarse_maxD_idx)]
-    # coarse_range_idx = [np.arange(max_idx+1, D.shape[1], dtype=int) for max_idx in accum_maxD_idx] # .shape[1] = diameter dimension
+    fine_range_idx = np.array([(D[t, :] > 0.0) & (D[t, :] < D_min) for t in range(D.shape[0])])  # .shape[0] = time dimension
+    accum_range_idx = np.array([(D[t,:] > D_min) & (D[t,:] < D_max) for t in range(D.shape[0])]) # .shape[0] = time dimension
+    coarse_range_idx = np.array([(D[t,:] > D_max) & (D[t,:] < max_coarse_D) for t in range(D.shape[0])])
 
     return fine_range_idx, accum_range_idx, coarse_range_idx
 
@@ -1300,18 +1294,6 @@ def hourly_rh_threshold_pickle_save_fast(dN, dVdlogD, dNdlogD, met_vars, D, dD, 
 
         met_idx = range(s_idx, e_idx+1)
 
-        # # bool = np.logical_and(np.array(met_vars['time']) > time_t,
-        # #                       np.array(met_vars['time']) < time_t + dt.timedelta(hours=1))
-        #
-        # if t == 0:
-        #     bool = np.logical_and(np.array(met_vars['time']) > time_t,
-        #                           np.array(met_vars['time']) < time_t + dt.timedelta(hours=1))
-        # else:
-        #     bool = np.logical_and(np.array(met_vars['time'][met_skip_idx:met_skip_idx+300]) >= time_t,
-        #                           np.array(met_vars['time'][met_skip_idx:met_skip_idx+300]) < time_t + dt.timedelta(hours=1))
-        #
-        # met_idx = np.where(bool == True)[0] + met_skip_idx
-        # # met_idx = np.where(bool == True)[0]
 
 
         if (tm1_diff.total_seconds() <= 15 * 60) & (t_diff.total_seconds() <= 15 * 60):
@@ -2176,7 +2158,7 @@ if __name__ == '__main__':
     # paper 1 accum radii range: 40 - 700 nm - ClearfLo
     # using dV/dlogD for NK (2015) diameter range: 80 - 1000 nm
     D_min_accum = 80.0
-    D_max_accum = 700.0
+    D_max_accum = 800.0
 
     # get the idx for each range
     fine_range_idx, accum_range_idx, coarse_range_idx = get_size_range_idx(D, D_min_accum, D_max_accum)
@@ -2269,9 +2251,10 @@ if __name__ == '__main__':
     #   need to estimate r_g from r_v as r_g is needed for f_RH LUT and only r_v is estimated from MURK aerosol
     #   mass in aerFO
 
-    mode_size = 'coarse'
-    x = dNdlogD['Dv_'+mode_size] / 2.0 / 1.0e3
-    y = dNdlogD['r_g_'+mode_size] / 1.0e3
+    mode_size = 'accum'
+    x = dNdlogD['Dv_'+mode_size] / 2.0 #/ 1.0e3
+    # y = dNdlogD['r_g_'+mode_size] / 1.0e3
+    y = dNdlogD['r_g'] # / 1.0e3
     idx = np.isfinite(x) & np.isfinite(y)
     m, b = np.polyfit(x[idx], y[idx], 1)
     r, p = pearsonr(x[idx], y[idx])
