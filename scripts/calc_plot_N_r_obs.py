@@ -25,7 +25,6 @@ import datetime as dt
 import pandas
 
 from copy import deepcopy
-
 import ellUtils as eu
 
 
@@ -232,7 +231,7 @@ def read_routine_aps(filepath_aps, year, met_vars):
     # find start and end of years data - bulk trim - needed to help time match later with smaller size data, which is a
     #   yearly dataset
     _, start, _ = eu.nearest(pro_time, dt.datetime(int(year), 1, 1))
-    _, end, _ = eu.nearest(pro_time, dt.datetime(int(year), 12, 31))
+    _, end, _ = eu.nearest(pro_time, dt.datetime(int(year)+1, 1, 1))
 
     # get headers and idx for just the particle size data - ignore the first column as it is <0.523
     raw_headers = np.array([i.split('@')[0] for i in N_raw[0]])
@@ -556,7 +555,6 @@ def calc_bin_parameters_general(N, units='nm'):
 
     # upper edge difference for the last bin is assumed be equal to the upper edge difference of the second to last bin
     #   therefore add the upper edge difference of the second to last bin, to the last bin.
-    # D_max = np.append(D_max, D[:, -1] + (D_diffs[:, -1]/2.0)) # checked # orig
     D_max = np.hstack((D_max, (D[:, -1] + (D_diffs[:, -1] / 2.0))[:, None]))
 
     # lower edge difference for the first bin is assumed to be equal to the lower edge difference of the second bin,
@@ -716,8 +714,8 @@ def calc_dNdlogD_from_N_general(N):
                     'binned': np.empty(N['binned'].shape)}
     dNdlogD['binned'][:] = np.nan
 
+    # loop through each diameter idx and do all the times for that idx at once.
     for D_idx, dlogD_i in enumerate(list(N['dlogD'].transpose())):
-        #  dNdlogD['binned'][:, D_idx] = N['binned'][:, D_idx] / dlogD_i
         dNdlogD['binned'][:, D_idx] = N['binned'][:, D_idx] / dlogD_i
 
     return dNdlogD
@@ -901,7 +899,7 @@ def merge_small_large_dNdlogD(small_dNdlogD, large_dNdlogD, timeRes=60):
     NOTE: ASSUMES data is sorted in time order (data is ok to have missing times in it)
     """
 
-    # time range - make sure mins = 0
+    # time range - make sure mins = 0 as the time range to match to will be created from this.
     start_time = np.max([small_dNdlogD['time'][0], large_dNdlogD['time'][0]])
     end_time = np.min([small_dNdlogD['time'][-1], large_dNdlogD['time'][-1]])
     start_time -= dt.timedelta(minutes=start_time.minute)
@@ -1010,6 +1008,131 @@ def merge_small_large_dNdlogD(small_dNdlogD, large_dNdlogD, timeRes=60):
     return dNdlogD, large_dNdlogD, small_D_idx, large_D_idx
 
 # processing / calculations
+
+def cuningham_slip_correction_code():
+
+
+    # # convert mobility equivalenet diameter to volume equivalent diameter
+    #
+    # # mobility diameter (d_m)
+    # d_m = smps_N['headers']
+    # # shape factor for this aerosol
+    # X = shape_factor['CBLK']
+    #
+    # def calculate_Cc(d_m):
+    #
+    #     """
+    #     Calculate the Cuningham slip correction factor (Cc) for solid particles
+    #     :param d_m [nm]: mobility equivalent diameter
+    #     :param X: dynamic shape factor
+    #     :return: Cc: Cuningham slip correction
+    #     """
+    #
+    #     # constants
+    #     ## Allen and Raabe 1985 for solid particles at STP, to calculate the Cunningham slip factor (Cc)
+    #     alpha = 1.142 # empirical constant for Cc
+    #     beta = 0.558 # empirical constant for Cc
+    #     gamma = 0.999 # empirical constant for Cc
+    #     lam = 68.0 # molecular mean free path [nm] for STP
+    #
+    #     # Knudsen number (what regime are we in? -> Free molecular - transition - continuum)
+    #     Kn = (2.0 * lam) / d_m
+    #     # Cuningham slip correction (Cc)
+    #     y = np.exp(-gamma/Kn) # part of equation
+    #     Cc = 1 + (Kn * (alpha + (beta * y)))
+    #
+    #     return Cc
+    #
+    # Cc_d_m = calculate_Cc(d_m)
+    #
+    # # # create d_v as 0 then adjust each time
+    # d_v = np.ones(d_m.shape)*0.01
+    # Cc_d_v = calculate_Cc(d_v)
+    #
+    # # # Knudsen number (what regime are we in? -> Free molecular - transition - continuum)
+    # # Kn = (2.0 * lam) / d_v
+    # # # Cuningham slip correction (Cc)
+    # # y = np.exp(-gamma/Kn) # part of equation
+    # # Cc_d_v = 1 + (Kn * (alpha + (beta * y)))
+    #
+    # d_m_guess = d_v * X * Cc_d_m / Cc_d_v
+    # diff = d_m - d_m_guess
+    # d_v2 = diff
+    #
+    # # d_v_guess = d_m / (X * Cc_d_m / Cc_d_v)
+    # # diff = d_v - d_v_guess
+    # # d_v_2 = d_v
+    #
+    # # so d_m guess using d_v = 0.01 was too low... therefore it needs to be increased
+    # # d_v2 = diff # in this first instance, this makes it larger...
+    # Cc_d_v2 = calculate_Cc(d_v2)
+    # d_m_guess2 = d_v2 * X * Cc_d_m / Cc_d_v2
+    # diff2 = d_m - d_m_guess2
+    # d_v3 = diff2
+    #
+    # # repreat the above steps and get a new diff
+    # Cc_d_v3 = calculate_Cc(d_v3)
+    # d_m_guess3 = d_v3 * X * Cc_d_m / Cc_d_v3
+    # diff3 = d_m - d_m_guess3
+    # d_v4 = diff3
+    #
+    # d_v = np.ones(d_m.shape) * 0.01
+    # keep = [d_v[0]]
+    # for i in range(50):
+    #     Cc_d_v = calculate_Cc(d_v)
+    #     d_m_guess = d_v * X * Cc_d_m / Cc_d_v
+    #     diff = d_m - d_m_guess
+    #     d_v = diff
+    #     keep += [d_v[0]]
+
+
+    # alpha = 1.142 # empirical constant for Cc
+    # beta = 0.558 # empirical constant for Cc
+    # gamma = 0.999 # empirical constant for Cc
+    # lam = 68.0 # molecular mean free path [nm] for STP
+    #
+    # # Knudsen number (what regime are we in? -> Free molecular - transition - continuum)
+    # Kn = (2.0 * lam) / d_m
+    #
+    #
+    # k = d_m/(1.2*Cc_d_m)
+    # a = (1.0 + beta)/alpha
+    # b = (2.0 * lam)/(k*a)
+    # c = (beta * (gamma**2.0))/(2.0 * alpha)
+    #
+    # x1 = 2.0*(a**3.0)
+    # x2 = 3 * np.sqrt(3.0)
+    # x3 = 4.0*(a**3.0)*c
+    # x4 = (a**2)*(b**2.0)
+    # x5 = 18.0*a*b*c
+    # x6 = 4.0*(b**3.0)
+    # x7 = 27.0*(c**2.0)
+    # x8 = 9.0*a*b
+    # x9 = 27.0*c
+    # x10 = 3.0 * (np.power(2.0,1.0/3.0))
+    # x11 = (-2.0*a) + (3.0*np.sqrt(3.0))
+    #
+    # y1 = np.sqrt(x3 - x4 + x5 - x6 + x7)
+    # y2 = np.power(-x1 + (x2 * y1) - x8 - x9, 1.0/3.0) # main cube root bit
+    # z1 = (y2 / x10) # first bit
+    #
+    # x13 = np.power(2.0, 1.0/3.0)
+    # x14 = ((-a**2)-3*b)
+    #
+    # z2 = (x13 * x14)/(3.0*y2)
+    # z3 = a/3.0
+    #
+    # answer = z1 - z2 - z3
+
+    # d_v_range = np.arange(1,601)
+    # d_m_range = np.arange(1,601)
+    # Cc_d_v = calculate_Cc(d_v_range)
+    # Cc_d_m = calculate_Cc(d_m_range)
+    #
+    # plt.plot(d_v_range, d_v_range*1.2/Cc_d_v, label='d_v*X/Cc(d_v)')
+    # plt.plot(d_m_range, d_m_range / Cc_d_m, label='d_m/Cc(d_m)')
+
+    return
 
 def get_size_range_idx(D, D_min, D_max):
 
@@ -1610,7 +1733,7 @@ if __name__ == '__main__':
 
     # year of data
     # for NK - only got 2014 and 2015 with APS data
-    years = ['2014']
+    years = ['2015']
     year = years[0]
     # years = [str(i) for i in range(2014, 2017)]
 
@@ -1762,8 +1885,8 @@ if __name__ == '__main__':
 
                 N_raw = np.asarray(data_frame)
                 smps_N_year = {'time': np.array([i.to_datetime() for i in N_raw[:, 0]]),
-                              'binned': np.array(N_raw[:, 1:-2]),
-                              'headers': np.array(list(data_frame)[1:-2])}
+                              'binned': np.array(N_raw[:, 1:-2], dtype=float),
+                              'headers': np.array(list(data_frame)[1:-2], dtype=float)}
 
                 # store data
                 # NOTE: Do not do a deepcopy!! for some reason there is a bug that makes the copy data very incorrect!!
@@ -1776,133 +1899,7 @@ if __name__ == '__main__':
                     smps_N['time'] = np.append(smps_N['time'], smps_N_year['time'])
                     smps_N['headers'] = smps_N_year['headers']
 
-
-            # # convert mobility equivalenet diameter to volume equivalent diameter
-            #
-            # # mobility diameter (d_m)
-            # d_m = smps_N['headers']
-            # # shape factor for this aerosol
-            # X = shape_factor['CBLK']
-            #
-            # def calculate_Cc(d_m):
-            #
-            #     """
-            #     Calculate the Cuningham slip correction factor (Cc) for solid particles
-            #     :param d_m [nm]: mobility equivalent diameter
-            #     :param X: dynamic shape factor
-            #     :return: Cc: Cuningham slip correction
-            #     """
-            #
-            #     # constants
-            #     ## Allen and Raabe 1985 for solid particles at STP, to calculate the Cunningham slip factor (Cc)
-            #     alpha = 1.142 # empirical constant for Cc
-            #     beta = 0.558 # empirical constant for Cc
-            #     gamma = 0.999 # empirical constant for Cc
-            #     lam = 68.0 # molecular mean free path [nm] for STP
-            #
-            #     # Knudsen number (what regime are we in? -> Free molecular - transition - continuum)
-            #     Kn = (2.0 * lam) / d_m
-            #     # Cuningham slip correction (Cc)
-            #     y = np.exp(-gamma/Kn) # part of equation
-            #     Cc = 1 + (Kn * (alpha + (beta * y)))
-            #
-            #     return Cc
-            #
-            # Cc_d_m = calculate_Cc(d_m)
-            #
-            # # # create d_v as 0 then adjust each time
-            # d_v = np.ones(d_m.shape)*0.01
-            # Cc_d_v = calculate_Cc(d_v)
-            #
-            # # # Knudsen number (what regime are we in? -> Free molecular - transition - continuum)
-            # # Kn = (2.0 * lam) / d_v
-            # # # Cuningham slip correction (Cc)
-            # # y = np.exp(-gamma/Kn) # part of equation
-            # # Cc_d_v = 1 + (Kn * (alpha + (beta * y)))
-            #
-            # d_m_guess = d_v * X * Cc_d_m / Cc_d_v
-            # diff = d_m - d_m_guess
-            # d_v2 = diff
-            #
-            # # d_v_guess = d_m / (X * Cc_d_m / Cc_d_v)
-            # # diff = d_v - d_v_guess
-            # # d_v_2 = d_v
-            #
-            # # so d_m guess using d_v = 0.01 was too low... therefore it needs to be increased
-            # # d_v2 = diff # in this first instance, this makes it larger...
-            # Cc_d_v2 = calculate_Cc(d_v2)
-            # d_m_guess2 = d_v2 * X * Cc_d_m / Cc_d_v2
-            # diff2 = d_m - d_m_guess2
-            # d_v3 = diff2
-            #
-            # # repreat the above steps and get a new diff
-            # Cc_d_v3 = calculate_Cc(d_v3)
-            # d_m_guess3 = d_v3 * X * Cc_d_m / Cc_d_v3
-            # diff3 = d_m - d_m_guess3
-            # d_v4 = diff3
-            #
-            # d_v = np.ones(d_m.shape) * 0.01
-            # keep = [d_v[0]]
-            # for i in range(50):
-            #     Cc_d_v = calculate_Cc(d_v)
-            #     d_m_guess = d_v * X * Cc_d_m / Cc_d_v
-            #     diff = d_m - d_m_guess
-            #     d_v = diff
-            #     keep += [d_v[0]]
-
-
-
-
-        # alpha = 1.142 # empirical constant for Cc
-        # beta = 0.558 # empirical constant for Cc
-        # gamma = 0.999 # empirical constant for Cc
-        # lam = 68.0 # molecular mean free path [nm] for STP
-        #
-        # # Knudsen number (what regime are we in? -> Free molecular - transition - continuum)
-        # Kn = (2.0 * lam) / d_m
-        #
-        #
-        # k = d_m/(1.2*Cc_d_m)
-        # a = (1.0 + beta)/alpha
-        # b = (2.0 * lam)/(k*a)
-        # c = (beta * (gamma**2.0))/(2.0 * alpha)
-        #
-        # x1 = 2.0*(a**3.0)
-        # x2 = 3 * np.sqrt(3.0)
-        # x3 = 4.0*(a**3.0)*c
-        # x4 = (a**2)*(b**2.0)
-        # x5 = 18.0*a*b*c
-        # x6 = 4.0*(b**3.0)
-        # x7 = 27.0*(c**2.0)
-        # x8 = 9.0*a*b
-        # x9 = 27.0*c
-        # x10 = 3.0 * (np.power(2.0,1.0/3.0))
-        # x11 = (-2.0*a) + (3.0*np.sqrt(3.0))
-        #
-        # y1 = np.sqrt(x3 - x4 + x5 - x6 + x7)
-        # y2 = np.power(-x1 + (x2 * y1) - x8 - x9, 1.0/3.0) # main cube root bit
-        # z1 = (y2 / x10) # first bit
-        #
-        # x13 = np.power(2.0, 1.0/3.0)
-        # x14 = ((-a**2)-3*b)
-        #
-        # z2 = (x13 * x14)/(3.0*y2)
-        # z3 = a/3.0
-        #
-        # answer = z1 - z2 - z3
-
-        # d_v_range = np.arange(1,601)
-        # d_m_range = np.arange(1,601)
-        # Cc_d_v = calculate_Cc(d_v_range)
-        # Cc_d_m = calculate_Cc(d_m_range)
-        #
-        # plt.plot(d_v_range, d_v_range*1.2/Cc_d_v, label='d_v*X/Cc(d_v)')
-        # plt.plot(d_m_range, d_m_range / Cc_d_m, label='d_m/Cc(d_m)')
-
-
-
-
-            # -------------------------------------------
+        # -------------------------------------------
 
         # get bin parameters
         smps_N = calc_bin_parameters_smps(smps_N, units='nm')
@@ -2019,12 +2016,20 @@ if __name__ == '__main__':
 
         # delete overlapping bins and merge
         # merge the dried APS (2D) diameters with smps (originally 1D, turned 2D when merged)
+        # small_dNdlogD, large_dNdlogD, timeRes = 60
         dNdlogD, aps_dNdlogD_2, small_D_idx, large_D_idx = merge_small_large_dNdlogD(smps_dNdlogD, aps_dNdlogD, timeRes=timeRes)
 
         D = dNdlogD['D']
         logD = dNdlogD['logD']
         dD = dNdlogD['dD']
         dlogD = dNdlogD['dlogD']
+
+
+    fig = plt.figure()
+    ax = plt.gca()
+    plt.loglog(smps_dNdlogD['D'], np.nanmean(smps_dNdlogD['dN'], axis=0), label='smps')
+    plt.loglog(np.nanmean(aps_dNdlogD['D'],axis=0), np.nanmean(aps_dNdlogD['dN'], axis=0), label='aps')
+    plt.legend()
 
     # ==============================================================================
     # Main processing of data
