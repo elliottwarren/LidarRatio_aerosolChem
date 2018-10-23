@@ -51,6 +51,9 @@ def create_statistics():
                        'rh_diff': [],
                        'rh_mod': [],
                        'rh_obs': [],
+                        'aer_ext_coeff_tot': [],
+                        'S': [],
+                        'transmission': [],
 
                        'back_diff_log': [],
                        'back_diff_norm': [],
@@ -59,6 +62,7 @@ def create_statistics():
                        'abs_back_diff_norm': [],
                        'back_obs': [],
                        'back_mod': [],
+                        'unatt_back_mod': [],
                        'ext_coeff_fine': [],
                        'ext_coeff_accum': [],
                        'ext_coeff_coarse': [],
@@ -66,7 +70,6 @@ def create_statistics():
                        'MBE': [],
                        'hr': [],
                        'datetime': []}
-
 
     return statistics
 
@@ -134,21 +137,25 @@ def build_statistics(statistics, mod_data, bsc_obs, pm10_obs, mod_height_idx, ce
 
     # save ext coefficients for each aerosol mode for later comparison
     if 'fine' in mod_data.keys():
-        statistics['ext_coeff_fine'] += list(mod_data['fine']['aer_ext_coeff'])
-        statistics['N_fine'] += list(mod_data['fine']['N'])
-        statistics['r_fine'] += list(mod_data['fine']['r_md'])
+        statistics['ext_coeff_fine'] += list(mod_data['fine']['aer_ext_coeff'][:, ceil_height_idx])
+        statistics['N_fine'] += list(mod_data['fine']['N'][:, ceil_height_idx])
+        statistics['r_fine'] += list(mod_data['fine']['r_d'][:, ceil_height_idx])
     if 'accum' in mod_data.keys():
-        statistics['ext_coeff_accum'] += list(mod_data['accum']['aer_ext_coeff'])
-        statistics['N_accum'] += list(mod_data['accum']['N'])
-        statistics['r_accum'] += list(mod_data['accum']['r_md'])
+        statistics['ext_coeff_accum'] += list(mod_data['accum']['aer_ext_coeff'][:, ceil_height_idx])
+        statistics['N_accum'] += list(mod_data['accum']['N'][:, ceil_height_idx])
+        statistics['r_accum'] += list(mod_data['accum']['r_d'][:, ceil_height_idx])
     if 'coarse' in mod_data.keys():
-        statistics['ext_coeff_coarse'] += list(mod_data['coarse']['aer_ext_coeff'])
-        statistics['N_coarse'] += list(mod_data['coarse']['N'])
-        statistics['r_coarse'] += list(mod_data['coarse']['r_md'])
+        statistics['ext_coeff_coarse'] += list(mod_data['coarse']['aer_ext_coeff'][:, ceil_height_idx])
+        statistics['N_coarse'] += list(mod_data['coarse']['N'][:, ceil_height_idx])
+        statistics['r_coarse'] += list(mod_data['coarse']['r_d'][:, ceil_height_idx])
 
     if 'aerosol_concentration_dry_air' in mod_data:
         murk_i = mod_data['aerosol_concentration_dry_air'][:, 0]  # 0th height = 5 m [micro g m-3]
         statistics['aer_mod'] += list(murk_i)
+
+    statistics['aer_ext_coeff_tot'] += list(mod_data['aer_ext_coeff_tot'][:, ceil_height_idx])
+    # statistics['S'] += list(mod_data['S'][:, ceil_height_idx])
+    statistics['transmission'] += list(mod_data['transmission'][:, ceil_height_idx])
 
     pm10_i = pm10_obs['pm_10'] # [micro g m-3]
     rh_mod = mod_data['RH'][:, mod_height_idx] # [%]
@@ -208,34 +215,37 @@ if __name__ == '__main__':
     statistics = create_statistics()
 
     # type of model evaluation and save string
-    aer_run_number = 8
+    aer_run_number = 7
     aer_run = 'run'+str(aer_run_number)
     #extra = '0.66fRH_constantS40' #'_constant_S_40'
-    extra = '_constant_S_40' # use this if there isn't anything extra to add to the save string
+    extra = '' # use this if there isn't anything extra to add to the save string
 
-    if aer_run_number == 0:
-        # NK CTRL - all clear sky days for paper 2
-        # CL31-D days '20160504', '20160505', '20160506'
-        daystrList = ['20160823','20160911','20161102','20161125','20161129','20161130','20161204','20161205','20161227','20161229',
-           '20170105','20170117','20170118','20170119','20170120','20170121','20170122','20170325','20170330','20170408','20170429',
-           '20170522','20170524','20170526','20170601','20170614','20170615','20170619','20170620','20170626','20170713','20170717',
-           '20170813','20170827','20170828','20170902']
-    elif aer_run_number in [1,2,3,4,5,7,8]:
-        # # NK N and r accum (no murk aerosol required) (should be 2014 - 2015 inclusive, for when we have aerosol data)
-        # # All clear days
-        daystrList = ['20140305', '20140306', '20140309', '20140314', '20140315', '20140316', '20140319', '20140329',
-                      '20140402', '20140415', '20140416', '20140504', '20140505', '20140518', '20140606', '20140703',
-                      '20140922', '20141005', '20141129', '20141229', '20150307', '20150310', '20150414', '20150415',
-                      '20150420', '20150421', '20150604', '20150611', '20150629', '20150710', '20150802', '20151025']
-        # daystrList = ['20140703', #testing for coarse
-        #               '20140922', '20141005', '20141129', '20141229', '20150307', '20150310', '20150414', '20150415',
-        #               '20150420', '20150421', '20150604', '20150611', '20150629', '20150710', '20150802', '20151025']
-        # # Subsample of "All clear days" that does not produce nan days (has all the required obs. data)
-        # daystrList = ['20140606', '20140703','20140922','20150307','20150310','20150414', '20150415', '20150420',
-        #               '20150421', '20150604','20150611','20150802']
-    elif aer_run_number == 6:
-        # further subsample when hourly S data is also available
-        daystrList = ['20140606', '20140703', '20150307', '20150420', '20150421','20150604','20150802']
+    # if aer_run_number == 0:
+    #     # NK CTRL - all clear sky days for paper 2
+    #     # CL31-D days '20160504', '20160505', '20160506'
+    #     daystrList = ['20160823','20160911','20161102','20161125','20161129','20161130','20161204','20161205','20161227','20161229',
+    #        '20170105','20170117','20170118','20170119','20170120','20170121','20170122','20170325','20170330','20170408','20170429',
+    #        '20170522','20170524','20170526','20170601','20170614','20170615','20170619','20170620','20170626','20170713','20170717',
+    #        '20170813','20170827','20170828','20170902']
+    # elif aer_run_number in [1,2,3,4,5,7,8]:
+    #     # # NK N and r accum (no murk aerosol required) (should be 2014 - 2015 inclusive, for when we have aerosol data)
+    #     # # All clear days
+    #     daystrList = ['20140305', '20140306', '20140309', '20140314', '20140315', '20140316', '20140319', '20140329',
+    #                   '20140402', '20140415', '20140416', '20140504', '20140505', '20140518', '20140606', '20140703',
+    #                   '20140922', '20141005', '20141129', '20141229', '20150307', '20150310', '20150414', '20150415',
+    #                   '20150420', '20150421', '20150604', '20150611', '20150629', '20150710', '20150802', '20151025']
+    #     # daystrList = ['20140703', #testing for coarse
+    #     #               '20140922', '20141005', '20141129', '20141229', '20150307', '20150310', '20150414', '20150415',
+    #     #               '20150420', '20150421', '20150604', '20150611', '20150629', '20150710', '20150802', '20151025']
+    #     # # Subsample of "All clear days" that does not produce nan days (has all the required obs. data)
+    #     # daystrList = ['20140606', '20140703','20140922','20150307','20150310','20150414', '20150415', '20150420',
+    #     #               '20150421', '20150604','20150611','20150802']
+    # elif aer_run_number == 6:
+    #     # further subsample when hourly S data is also available
+    #     daystrList = ['20140606', '20140703', '20150307', '20150420', '20150421','20150604','20150802']
+
+    # common days across all cases
+    daystrList = ['20140606', '20140703', '20150307', '20150420', '20150421', '20150604', '20150802']
 
     # all backscatter was np.nan as obsN or obsr was missing
     # daystrList = ['20141129']
@@ -243,49 +253,51 @@ if __name__ == '__main__':
     # day when backscatter was present
     #daystrList = ['20150415']
 
-    # day when rel_vol was present twice
-    #print 'overriding daystrList to one case'
-    #daystrList = ['20140314']
 
     days_iterate = eu.dateList_to_datetime(daystrList)
 
-    # argumets for aerFO based on run type
+    # if aer_run == 'run0': # CTRL
+    #     kwargs = {}
+    #     eval_type = 'CTRL'
 
-    if aer_run == 'run0': # CTRL
-        kwargs = {}
-        eval_type = 'CTRL'
-    if aer_run == 'run1': # pm10 as mass
-        kwargs = {'pm10_as_aerosol_input': True}
+    # argumets for aerFO based on run type
+    if aer_run == 'run0': # pm10 as mass
+        kwargs = {'pm10_as_aerosol_input': True, 'use_S_constant': 43.136059795372738}
         aer_modes = ['accum']
         eval_type = 'pm10aerinput'
-    elif aer_run == 'run2': # N and r (accum range)
-        kwargs = {'obs_N': True, 'obs_r': True} # , 'use_S_constant': 40.0
+    elif aer_run == 'run1': # accum range
+        kwargs = {'pm10_as_aerosol_input': True, 'obs_N': True,
+                  'use_S_constant': 43.136059795372738}  # , 'use_S_constant': 40.0
+        aer_modes = ['accum']
+        eval_type = 'obs_N_pm10_r_accum'
+    elif aer_run == 'run2':  # accum range
+        kwargs = {'pm10_as_aerosol_input': True, 'obs_r': True, 'use_S_constant': 43.136059795372738}  # , 'use_S_constant': 40.0
+        aer_modes = ['accum']
+        eval_type = 'pm10_N_obs_r_accum'
+    elif aer_run == 'run3': # N and r (accum range)
+        kwargs = {'obs_N': True, 'obs_r': True, 'use_S_constant': 43.136059795372738} # , 'use_S_constant': 40.0
         aer_modes = ['accum']
         eval_type = 'obs_N_obs_r_accum'
-    elif aer_run == 'run3': # N and r (fine, accum range)
-        kwargs = {'obs_N': True, 'obs_r': True}
+    elif aer_run == 'run4': # N and r (fine, accum range)
+        kwargs = {'obs_N': True, 'obs_r': True, 'use_S_constant': 43.136059795372738}
         aer_modes = ['fine', 'accum']
         eval_type = 'obs_N_obs_r_fine_accum'
-    elif aer_run == 'run4': # N and r (fine, accum and coarse range)
-        kwargs = {'obs_N': True, 'obs_r': True}
+    elif aer_run == 'run5': # N and r (fine, accum and coarse range)
+        kwargs = {'obs_N': True, 'obs_r': True, 'use_S_constant': 43.136059795372738}
         aer_modes = ['fine', 'accum', 'coarse']
         eval_type = 'obs_N_obs_r_fine_accum_coarse'
-    if aer_run == 'run5':  # pm10 as mass to get N and r, then use hourly Q and f(RH) values instaed of using the LUT
-        kwargs = {'pm10_as_aerosol_input': True, 'hourly_Q_extdry': True, 'hourly_fRH': True}
-        aer_modes = ['accum']
-        eval_type = 'pm10aerinput_Q_extdry_fRH_hourly_obs'
-    elif aer_run == 'run6':
-        kwargs = {'obs_N': True, 'obs_r': True, 'use_S_hourly': True}
-        aer_modes = ['accum']
-        eval_type = 'obs_N_obs_r_accum-S_hourly'
-    elif aer_run == 'run7':  # pm10 as mass to get N and r, then use hourly Q and f(RH) values instaed of using the LUT
-        kwargs = {'obs_N': True, 'obs_r': True, 'hourly_Q_extdry': True, 'hourly_fRH': True}
-        aer_modes = ['accum']
-        eval_type = 'obs_N_obs_r_accum-Q_extdry_fRH_hourly_obs'
-    elif aer_run == 'run8':  # pm10 as mass to get N and r, then use hourly Q and f(RH) values instaed of using the LUT
-        kwargs = {'obs_N': True, 'obs_r': True, 'hourly_Q_extdry': True, 'hourly_fRH': True, 'use_S_constant': 40.0}
-        aer_modes = ['accum', 'coarse']
-        eval_type = 'obs_N_obs_r_accum_corase_-Q_extdry_fRH_hourly_obs'
+    elif aer_run == 'run6':  # all the variabiles at once - maximum information
+        kwargs = {'obs_N': True, 'obs_r': True, 'hourly_Q_extdry': True, 'hourly_fRH': True, 'use_S_constant': 43.136059795372738}
+        aer_modes = ['fine','accum', 'coarse']
+        eval_type = 'CTRL_obs_N_obs_r_fine_accum_corase_-Q_extdry_fRH_hourly_obs'
+    elif aer_run == 'run7':  # all the variabiles at once - maximum information
+        kwargs = {'obs_N': True, 'obs_r': True, 'hourly_Q_extdry': True, 'hourly_fRH': True, 'use_S_hourly': True}
+        aer_modes = ['fine','accum', 'coarse']
+        eval_type = 'CTRL_obs_N_obs_r_fine_accum_corase_-Q_extdry_fRH_hourly_obs_hourly_S'
+    # elif aer_run == 'run5':  # pm10 as mass to get N and r, then use hourly Q and f(RH) values instaed of using the LUT
+    #     kwargs = {'obs_N': True, 'obs_r': True, 'use_S_constant': 43.136059795372738}
+    #     aer_modes = ['fine', 'accum', 'coarse']
+    #     eval_type = 'obs_N_obs_r_fine_accum_coarse_meanS'
 
     # add the extra bit
     eval_type += extra
@@ -294,15 +306,16 @@ if __name__ == '__main__':
     print 'aerFO ' + aer_run + ' in progress....'
 
     # ceilometer
-    if aer_run_number == 0:
-        ceil_id = 'CL31-E'
-    else:
-        ceil_id = 'CL31-D'
+    # if aer_run_number == 0:
+    #     ceil_id = 'CL31-E'
+    # else:
+    #     ceil_id = 'CL31-D'
+    ceil_id = 'CL31-D'
     site = 'NK'
     ceil = ceil_id + '_' + site
     site_bsc = {ceil: FOcon.site_bsc[ceil]}
 
-    savestr = site + '_' + eval_type + '_' +aer_run + '.npy'
+    savestr = aer_run + '_' + site + '_' + eval_type + '.npy'
 
     # savename for plotted files
     savename = 'delta_beta_delta_m_'+eval_type
@@ -344,33 +357,29 @@ if __name__ == '__main__':
         # Create stats then save them somewhere
         # plot all the aerFO vs BSC run results once they have all be processed and saved
 
-        # control run - needs:
-        # new f(RH)
-        # new Q_ext,dry # boost the res at lower values
-        # new S
-        # Control run - use observed RH instead of modelled
-        # mod_data = FO.mod_site_extract_calc(day, ceil_data_i, modDatadir, model_type, res, 905, version=version,
-        #                 allvars=True, fullForecast=False, obs_RH=True, **kwargs)
+        # if aer_run_number == 0:
+        #     mod_data = FO.mod_site_extract_calc(day, ceil_data_i, modDatadir, model_type, res, 905, version=version,
+        #                     allvars=True, fullForecast=False, obs_RH=True, **kwargs)
+        # else:
+        #     # run 1+ - obs N and r(and obs RH so its a fair comparison with the control run)
+        #     mod_data = {'NK':FO.forward_operator_from_obs(day, ceil_lambda_nm, version=version,
+        #                     allvars=True, fullForecast=False, aer_modes=aer_modes, obs_RH=True, **kwargs)}
 
-        if aer_run_number == 0:
-            mod_data = FO.mod_site_extract_calc(day, ceil_data_i, modDatadir, model_type, res, 905, version=version,
-                            allvars=True, fullForecast=False, obs_RH=True, **kwargs)
-        else:
-            # run 2+ - obs N and r(and obs RH so its a fair comparison with the control run)
-            mod_data = {'NK':FO.forward_operator_from_obs(day, ceil_lambda_nm, version=version,
-                            allvars=True, fullForecast=False, aer_modes=aer_modes, obs_RH=True, **kwargs)}
+        # run 1+ - obs N and r(and obs RH so its a fair comparison with the control run)
+        mod_data = {'NK':FO.forward_operator_from_obs(day, ceil_lambda_nm, version=version,
+                        allvars=True, fullForecast=False, aer_modes=aer_modes, obs_RH=True, **kwargs)}
 
         # check number of data points that arn't nan near the surface
         print float(np.where(~np.isnan(np.array(mod_data['NK']['backscatter'])))[0].shape[0])/70
 
         # if mod_data is all np.nan because obsN or obsr was mssing all day, then skip the day's processing
-        if all(np.isnan(mod_data['NK']['backscatter']).flatten()):
+        if False: # all(np.isnan(mod_data['NK']['backscatter']).flatten()):
             print ' all mod_data[''NK''][''backscatter''] is nan - skipping the day '
         else:
             keep_days += [day.strftime('%Y%m%d')]
 
             # Read in BSC data
-            bsc_obs = FO.read_ceil_obs(day, site_bsc, ceilDatadir, mod_data, calib=True, version=version)
+            bsc_obs = FO.read_ceil_obs(day, site_bsc, ceilDatadir, mod_data, calib=True, version=version, var_type='beta_tR')
 
             # if obs data for this day exists...
             if ceil not in bsc_obs:
@@ -420,22 +429,26 @@ if __name__ == '__main__':
     # for i in [55, 56, 57, 58, 59, 60, 61, 62, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74]:
     #     statistics['back_mod'][i] = np.nan
 
-    # scatter plot beta_o vs pm10; beta_m vs murk
-    if aer_run_number == 0:
-        low_aer_bool = np.array(statistics['aer_mod']) <= 100 #CTRL
-        vlow_aer_bool = np.array(statistics['aer_mod']) <= 50 # CTRL
-    else:
-        low_aer_bool = np.array(statistics['aer_obs']) <= 100
-        vlow_aer_bool = np.array(statistics['aer_obs']) <= 50
+    # # scatter plot beta_o vs pm10; beta_m vs murk
+    # if aer_run_number == 0:
+    #     low_aer_bool = np.array(statistics['aer_mod']) <= 100 #CTRL
+    #     vlow_aer_bool = np.array(statistics['aer_mod']) <= 50 # CTRL
+    # else:
+    #     low_aer_bool = np.array(statistics['aer_obs']) <= 100
+    #     vlow_aer_bool = np.array(statistics['aer_obs']) <= 50
+
+    low_aer_bool = np.array(statistics['aer_obs']) <= 100
+    vlow_aer_bool = np.array(statistics['aer_obs']) <= 50
 
     fig = plt.figure()
     ax = plt.gca()
 
     plt.scatter(statistics['aer_obs'], statistics['back_obs'], s=3, color='blue')
-    if aer_run_number == 0:
-        plt.scatter(statistics['aer_mod'], statistics['back_mod'], s=3, color='red') # CTRL
-    else:
-        plt.scatter(statistics['aer_obs'], statistics['back_mod'], s=3, color='red') # runs 2+
+    # if aer_run_number == 0:
+    #     plt.scatter(statistics['aer_mod'], statistics['back_mod'], s=3, color='red') # CTRL
+    # else:
+    #     plt.scatter(statistics['aer_obs'], statistics['back_mod'], s=3, color='red') # runs 2+
+    plt.scatter(statistics['aer_obs'], statistics['back_mod'], s=3, color='red')  # runs 2+
     #plt.scatter(np.array(statistics['aer_mod'])[low_aer_bool], np.array(statistics['back_mod'])[low_aer_bool],
     #            s=3, color='green', label='murk<=100')
 
@@ -451,10 +464,11 @@ if __name__ == '__main__':
     x_lim = ax.get_xlim()
     ax.plot(np.array(x_lim), m * np.array(x_lim) + b, ls='-', color='blue', label='obs')
 
-    if aer_run_number == 0:
-        x = np.array(statistics['aer_mod']) # CTRL
-    else:
-        x = np.array(statistics['aer_obs']) # runs 2+
+    # if aer_run_number == 0:
+    #     x = np.array(statistics['aer_mod']) # CTRL
+    # else:
+    #     x = np.array(statistics['aer_obs']) # runs 2+
+    x = np.array(statistics['aer_obs'])  # runs 2+
     y = np.array(statistics['back_mod'])
     idx = np.isfinite(x) & np.isfinite(y)
     # idx = np.where(y > 0.75e-05)[0] # find outliers in /beta_m
@@ -467,10 +481,11 @@ if __name__ == '__main__':
     x_lim = ax.get_xlim()
     ax.plot(np.array(x_lim), m * np.array(x_lim) + b, ls='-', color='red', label='model')
 
-    if aer_run_number == 0:
-        x = np.array(statistics['aer_mod'])[low_aer_bool] # CTRL
-    else:
-        x = np.array(statistics['aer_obs'])[low_aer_bool] # runs 2+
+    # if aer_run_number == 0:
+    #     x = np.array(statistics['aer_mod'])[low_aer_bool] # CTRL
+    # else:
+    #     x = np.array(statistics['aer_obs'])[low_aer_bool] # runs 2+
+    x = np.array(statistics['aer_obs'])[low_aer_bool]  # runs 2+
     y = np.array(statistics['back_mod'])[low_aer_bool]
     idx = np.isfinite(x) & np.isfinite(y)
     m, b = np.polyfit(x[idx], y[idx], 1)
@@ -482,10 +497,11 @@ if __name__ == '__main__':
     x_lim = ax.get_xlim()
     ax.plot(np.array(x_lim), m * np.array(x_lim) + b, ls='--', color='green', label='model<=100')
 
-    if aer_run_number == 0:
-        x = np.array(statistics['aer_mod'])[vlow_aer_bool] # CTRL
-    else:
-        x = np.array(statistics['aer_obs'])[vlow_aer_bool] # runs 2+
+    # if aer_run_number == 0:
+    #     x = np.array(statistics['aer_mod'])[vlow_aer_bool] # CTRL
+    # else:
+    #     x = np.array(statistics['aer_obs'])[vlow_aer_bool] # runs 2+
+    x = np.array(statistics['aer_obs'])[vlow_aer_bool]  # runs 2+
     y = np.array(statistics['back_mod'])[vlow_aer_bool]
     idx = np.isfinite(x) & np.isfinite(y)
     m, b = np.polyfit(x[idx], y[idx], 1)
@@ -551,9 +567,7 @@ if __name__ == '__main__':
     # np.nanmean(statistics['aer_obs'])
     # idx = np.isfinite(statistics['aer_obs'])
     # # ----------------------------------------------
-    #
-    # a = np.nanmean(statistics['ext_coeff_accum'])
-    # b = np.nanmean(statistics['ext_coeff_fine'])
-    # plt.plot()
+
+
 
     print 'END PROGRAM'
