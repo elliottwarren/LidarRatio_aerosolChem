@@ -26,6 +26,7 @@ import pandas
 
 from copy import deepcopy
 import ellUtils as eu
+import ceilUtils as ceil
 
 
 # Reading and reformatting
@@ -1767,10 +1768,10 @@ if __name__ == '__main__':
                    'CBLK': 1200.0}
 
     # dynamic shape factor (X=1 for perfect sphere, X>1 for non-perfect sphere)
-    shape_factor = {'(NH4)2SO4': 1, # Seinfeld and Pandis
-                   'NH4NO3': 1, # taken here as 1
+    shape_factor = {'(NH4)2SO4': 1.0, # Seinfeld and Pandis
+                   'NH4NO3': 1.0, # taken here as 1
                    'NaCl': 1.08, # Seinfeld and Pandis
-                   'CORG': 1, # Zelenyuk et al., 2006
+                   'CORG': 1.0, # Zelenyuk et al., 2006
                    'CBLK': 1.2} # Zhang et al., 2016
 
     # pure water density
@@ -1868,6 +1869,7 @@ if __name__ == '__main__':
                       'binned': np.array(N_raw[:, 1:-2]),
                       'headers': np.array(list(data_frame)[1:-2])}
 
+
         # NK long SMPS dataset (.xls) 2007 - 2016 inclusively
         if (site_meta['period'] == 'long_term') & (site_meta['site_short'] == 'NK'):
 
@@ -1884,6 +1886,7 @@ if __name__ == '__main__':
                 data_frame = pandas.read_excel(filepath_SMPS, year)
 
                 N_raw = np.asarray(data_frame)
+                # ignore the last two columns (562.4 and 604.3 nm) as they overlap with APS data.
                 smps_N_year = {'time': np.array([i.to_datetime() for i in N_raw[:, 0]]),
                               'binned': np.array(N_raw[:, 1:-2], dtype=float),
                               'headers': np.array(list(data_frame)[1:-2], dtype=float)}
@@ -2025,6 +2028,7 @@ if __name__ == '__main__':
         dlogD = dNdlogD['dlogD']
 
 
+    # aps D are all the same across the rows (good) aps_D_max = 542.0
     fig = plt.figure()
     ax = plt.gca()
     plt.loglog(smps_dNdlogD['D'], np.nanmean(smps_dNdlogD['dN'], axis=0), label='smps')
@@ -2105,25 +2109,25 @@ if __name__ == '__main__':
         dVdlogD['binned'][:, i] = (np.pi / 6.0) * (D_i ** 3.0) * dNdlogD['binned'][:, i]
 
 
-    # Calculate the volume and number mean diameters for 0 - 2.5 micron range (Dv and Dn respectively)
-    # Get size range
-    D_min = 0.0 # use lowest value in D as the lower limit
-    D_max = 2500.0 # 2.5 microns
-    _, size_range_idx, _ = get_size_range_idx(D, D_min, D_max)
-
-    dNdlogD['Dv_lt2p5'], dNdlogD['Dn_lt2p5'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdlogD, dlogD, D)
-
-    # calculate the volume and number mean diameters for the 2.5 - 10 micron (Dv and Dn respectively)
-    D_min = 2500.0 # 2.5 microns
-    D_max = 10000.0 # 10 microns
-    _, size_range_idx, _ = get_size_range_idx(D, D_min, D_max)
-    dNdlogD['Dv_2p5_10'], dNdlogD['Dn_2p5_10'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdlogD, dlogD, D)
-
-    # calculate the volume and number mean diameters for below 10 micron (Dv and Dn respectively)
-    D_min = 0.0 # 0 microns
-    D_max = 10000.0 # 10 microns
-    _, size_range_idx, _ = get_size_range_idx(D, D_min, D_max)
-    dNdlogD['Dv_10'], dNdlogD['Dn_10'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdlogD, dlogD, D)
+    # # Calculate the volume and number mean diameters for 0 - 2.5 micron range (Dv and Dn respectively)
+    # # Get size range
+    # D_min = 0.0 # use lowest value in D as the lower limit
+    # D_max = 2500.0 # 2.5 microns
+    # _, size_range_idx, _ = get_size_range_idx(D, D_min, D_max)
+    #
+    # dNdlogD['Dv_lt2p5'], dNdlogD['Dn_lt2p5'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdlogD, dlogD, D)
+    #
+    # # calculate the volume and number mean diameters for the 2.5 - 10 micron (Dv and Dn respectively)
+    # D_min = 2500.0 # 2.5 microns
+    # D_max = 10000.0 # 10 microns
+    # _, size_range_idx, _ = get_size_range_idx(D, D_min, D_max)
+    # dNdlogD['Dv_2p5_10'], dNdlogD['Dn_2p5_10'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdlogD, dlogD, D)
+    #
+    # # calculate the volume and number mean diameters for below 10 micron (Dv and Dn respectively)
+    # D_min = 0.0 # 0 microns
+    # D_max = 10000.0 # 10 microns
+    # _, size_range_idx, _ = get_size_range_idx(D, D_min, D_max)
+    # dNdlogD['Dv_10'], dNdlogD['Dn_10'] = calc_volume_and_number_mean_diameter(size_range_idx, dNdlogD, dlogD, D)
 
 
     # # extract out only aerosol data based on the RH threshold and if it is less or more than it.
