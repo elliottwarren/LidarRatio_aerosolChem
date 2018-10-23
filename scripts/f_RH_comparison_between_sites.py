@@ -59,13 +59,13 @@ if __name__ == '__main__':
     # ---------------------------------------------------
 
     # RH
-    #RH_path = datadir + 'WXT_KSSW_'+str(year)+'_15min.nc'
-    #RH_obs = eu.netCDF_read(RH_path)
+    RH_paths = [datadir + 'WXT_KSSW_'+y+'_15min.nc' for y in ['2014', '2015']]
+    RH_obs = eu.netCDF_read(RH_paths)
 
     # N(D) #use the Dn_accum.
     N_path = N_dir + 'accum_Ntot_Dn_NK_SMPS_'+str(year)+'.npy'
     N = np.load(N_path).flat[0]
-    r_accum_m = N['Dn_accum'] / 2 / 1e9 # conv. to [m] from [nm]
+    r_accum_m = N['Dv_accum'] / 2 / 1e9 # conv. to [m] from [nm]
 
     # f(RH) read in
     f_RH_data = {}
@@ -76,9 +76,6 @@ if __name__ == '__main__':
 
         # read in f(RH) LUTs for each site
         path = fRHdir + dataRes + '_f(RH)_' + site + '_905.0nm.nc'
-
-        # eu.netCDF_info(path)
-
         rawdata = eu.netCDF_read(path)
 
         # .shape(time, 5 radii sample, RH)
