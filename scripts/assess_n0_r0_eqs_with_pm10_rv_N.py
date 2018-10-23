@@ -3,12 +3,8 @@ Assess the early equations in the aerFO that estiamte N and r from N0 and r0 res
 overestimation in /beta_m by the aerFO...
 """
 
-# read in pm10
-# read in rv and N
-# calculate aerFO rv and N from the equations (dashed lines)
-# plot all together
-
 import matplotlib.pyplot as plt
+import statsmodels.api as sm
 
 import numpy as np
 import datetime as dt
@@ -16,6 +12,9 @@ from dateutil import tz
 
 import ellUtils as eu
 from forward_operator import FOconstants as FOcon
+
+# import lowess from the api
+lowess = sm.nonparametric.lowess
 
 def read_pm10_obs(aer_fname):
 
@@ -163,7 +162,7 @@ if __name__ == '__main__':
     pm10_obs['pm10_mass_mixing_ratio'] = pm10_obs['pm_10'] / wxt_obs['air_density']
 
     # create aerFO equation curves to overplot onto the scatter plots
-    q_aer_ug_kg = np.arange(0, 90)
+    q_aer_ug_kg = np.arange(0, 75)
     q_aer_kg_kg = q_aer_ug_kg * 1e-9
     m0 = FOcon.m0_aer_urban
     p = FOcon.p_aer
@@ -172,16 +171,40 @@ if __name__ == '__main__':
     N_aer = FOcon.N0_aer_urban * np.power((q_aer_kg_kg / m0), 1.0 - (3.0 * p))
     r_md = r0 * np.power((q_aer_kg_kg / m0), p)
 
-    plt.figure()
-    plt.scatter(pm10_obs['pm10_mass_mixing_ratio'], N_r_obs['Dv_accum']/2 ,s=2)
-    plt.plot(q_aer_ug_kg, r_md * 1e9, '--', color='grey', alpha=0.7)
-    plt.xlabel('pm10 [microgram kg-1]')
-    plt.ylabel('volume radius [nm]')
-    plt.savefig(savedir + 'r_accum_vs_pm10_NK_2014-2015.png')
+    # LOWESS fit to the data
+    # set lowess and the function
 
-    plt.figure()
-    plt.scatter(pm10_obs['pm10_mass_mixing_ratio'], N_r_obs['Ntot_accum'] *1e6 / 2, s=2)
-    plt.plot(q_aer_ug_kg, N_aer, '--', color='grey', alpha=0.7)
-    plt.xlabel('pm10 [microgram kg-1]')
-    plt.ylabel('Ntot (accum) [cm-3]')
+    # LOWESS statistics on all pairs where pairs are withint he low and upp limits
+    it = 3
+    frac = 0.3
+
+    # NOTE: lowess(y,then x), opposite way round for some reason...
+    r_est = lowess(N_r_obs['Dv_accum']/2, pm10_obs['pm10_mass_mixing_ratio'], frac=frac, it=it)
+    N_est = lowess(N_r_obs['Ntot_accum'] *1e6, pm10_obs['pm10_mass_mixing_ratio'], frac=frac, it=it)
+
+    plt.rcParams.update({'font.size': 12})
+
+    plt.figure(figsize=(7, 4.5))
+    ax = plt.gca()
+    plt.scatter(pm10_obs['pm10_mass_mixing_ratio'], N_r_obs['Ntot_accum'] *1e6, s=2, label='observed')
+    plt.plot(q_aer_ug_kg, N_aer, '--', color='black', alpha=1.0, label='aerFO estimate')
+    plt.plot(N_est[:,0], N_est[:,1], '--', color='red', alpha=1.0, label='LOWESS')
+    plt.xlabel(r'$PM_{10} \/\/[\mu g \/kg^{-1}]$', fontsize=14)
+    plt.ylabel(r'$N$'+r' [$m^{-3}$]', fontsize=14)
+    eu.add_at(ax, 'a)', size=14)
+    plt.tight_layout()
+    #plt.legend()
     plt.savefig(savedir + 'N_accum_vs_pm10_NK_2014-2015.png')
+
+    plt.figure(figsize=(7, 4.5))
+    ax = plt.gca()
+    plt.scatter(pm10_obs['pm10_mass_mixing_ratio'], N_r_obs['Dv_accum']/2 ,s=2, label='observed')
+    plt.plot(q_aer_ug_kg, r_md * 1e9, '--', color='black', alpha=1.0, label='aerFO estimate')
+    plt.plot(r_est[:,0], r_est[:,1], '--', color='red', alpha=1.0, label='LOWESS')
+    plt.ylim([100.0, 255.0])
+    plt.xlabel(r'$PM_{10} \/\/[\mu g \/kg^{-1}]$', fontsize=14)
+    plt.ylabel(r'$r_{md} $'+' [nm]', fontsize=14)
+    eu.add_at(ax, 'b)', size=14)
+    plt.tight_layout()
+    #plt.legend()
+    plt.savefig(savedir + 'r_accum_vs_pm10_NK_2014-2015.png')
